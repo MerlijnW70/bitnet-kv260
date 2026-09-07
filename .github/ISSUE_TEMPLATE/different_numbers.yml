@@ -1,0 +1,52 @@
+name: My board gives different numbers
+description: It runs, the answers are right, but the speed or the power is not what is recorded
+labels: [measurement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Every figure in `results/` came from one board, one image and one kernel, listed in
+        `ENVIRONMENT.md`. A different board giving different numbers is information worth having,
+        not necessarily a fault. Two things account for most of it: a fabric at 100 MHz instead of
+        250, which `doctor.sh` catches, and another process taking a core, which the shift scan
+        amplifies (see `results/kria-spec-results.txt`).
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: The whole output of ./doctor.sh
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: numbers
+    attributes:
+      label: The numbers you measured, and the command that produced them
+      description: |
+        Paste the runtime's own timing lines, not a summary. `tools/provebench.py` produces the
+        comparable ones. Say how many runs and whether the ids matched.
+      render: text
+    validations:
+      required: true
+
+  - type: input
+    id: load
+    attributes:
+      label: What else was running
+      description: "`uptime` and, if you have it, whether polkitd or anything else was busy."
+      placeholder: load 0.09, nothing else running
+    validations:
+      required: true
+
+  - type: dropdown
+    id: ids
+    attributes:
+      label: Did the generated token ids match the recorded ones
+      description: ./selftest.sh compares them for you.
+      options:
+        - "yes, identical"
+        - "no, they differ"
+        - "I did not check"
+    validations:
+      required: true

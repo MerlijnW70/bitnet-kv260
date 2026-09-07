@@ -1,0 +1,63 @@
+name: Something does not work on my board
+description: Wrong output, a failed load, a hang, or an error you cannot place
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Run `./doctor.sh` and paste its whole output below.** Almost every report is settled by it:
+        a fabric at 100 MHz, a missing u-dma-buf buffer and a half-loaded bitstream all look alike
+        from the outside, and `doctor.sh` tells them apart in one screen.
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: The whole output of ./doctor.sh
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What you ran and what happened
+      description: The exact command, and its output. Paste it, do not describe it.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: true
+
+  - type: input
+    id: image
+    attributes:
+      label: Board image and kernel
+      description: "`uname -a` and, if you know it, which Ubuntu image you flashed."
+      placeholder: Linux kria 5.15.0-1027-xilinx-zynqmp ... / Ubuntu 22.04 Kria image
+    validations:
+      required: true
+
+  - type: dropdown
+    id: loaded
+    attributes:
+      label: How the fabric was loaded
+      options:
+        - sudo xmutil loadapp kv260-bitnet
+        - sudo ./setup.sh --fabric
+        - some other way, described above
+        - I do not know
+    validations:
+      required: true
+
+  - type: textarea
+    id: selftest
+    attributes:
+      label: The output of ./selftest.sh, if it got that far
+      render: text
+    validations:
+      required: false

@@ -1,0 +1,85 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  static:
+    name: scripts, json and the comment rule
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: every python file compiles
+        run: python -m compileall -q .
+
+      - name: every shell script parses
+        run: |
+          set -eu
+          fail=0
+          for f in $(git ls-files '*.sh'); do
+            bash -n "$f" || { echo "*** $f does not parse"; fail=1; }
+          done
+          exit $fail
+
+      - name: every json file parses
+        run: |
+          set -eu
+          fail=0
+          for f in $(git ls-files '*.json'); do
+            python -c 'import json,sys; json.load(open(sys.argv[1], encoding="utf-8"))' "$f" \
+              || { echo "*** $f is not valid json"; fail=1; }
+          done
+          exit $fail
+
+      - name: no comments in any code file
+        run: python tools/no_comments.py
+
+      - name: the tree refers to nothing outside itself
+        run: |
+          set -eu
+          if git grep -nIE 'F:[/\\]oracle' -- . ; then
+            echo "*** a file refers to the research repository this was extracted from"
+            exit 1
+          fi
+          echo "clean"
+
+      - name: the device-tree overlay names the bitstream that ships
+        run: |
+          set -eu
+          want=$(ls firmware/*.bit.bin | xargs -n1 basename)
+          got=$(grep -o 'firmware-name = "[^"]*"' firmware/kv260-bitnet.dtso | cut -d'"' -f2)
+          echo "overlay names $got, the bitstream is $want"
+          [ "$got" = "$want" ] || { echo "*** they must be the same or the previous bitstream stays loaded"; exit 1; }
+
+  matvec:
+    name: the matvec engine in simulation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install icarus verilog
+        run: sudo apt-get update && sudo apt-get install -y iverilog
+
+      - name: tb_ternary_matvec
+        run: ./hardware/run-testbenches.sh matvec
+
+  glue:
+    name: the ffn glue in simulation
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install icarus verilog
+        run: sudo apt-get update && sudo apt-get install -y iverilog
+
+      - name: tb_ternary_glue
+        run: ./hardware/run-testbenches.sh glue

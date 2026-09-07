@@ -60,4 +60,5 @@ sudo env PYTHONPATH=/home/ubuntu/.local/lib/python3.10/site-packages \
 
 Everything else — what it is, how it works, what was measured, what was verified and what was not,
 and what to do when a step fails — is in [docs/](docs/), starting at
-[docs/overview.md](docs/overview.md).
+[docs/overview.md](docs/overview.md). To change something, see
+[CONTRIBUTING.md](CONTRIBUTING.md); most of it can be worked on without a board.
