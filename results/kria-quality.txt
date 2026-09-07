@@ -1,0 +1,940 @@
+BitNet b1.58 2B4T answering a 26-prompt quality battery three ways: on the KV260's grown fabric (board/bitnet_kria.c
+through board/bitnet_chat.py), on the same checkpoint in bf16 on an RTX 4080, and on bitnet.cpp's own ARM kernels on
+the same KV260. Greedy everywhere, the same chat template, the same system message and the same max_new. Collected by
+the quality agent into board/research/ternary/bitnet/quality-answers.json (measured 2026-09-06), judged here by four
+agents, one per pair of categories, each judging the board's answer against the other two.
+
+HOW IT WAS RUN
+  Board: board/bitnet_kria.c (md5 a7aa05e233f082d2e112cfb54433594d) on /home/ubuntu/bitnet-kria, the flashed
+    board/ffn.bit.bin (md5 e2c75fd399848b1f672326f4a559f236) at 250 MHz, four ternary matvec engines + the mul16 glue,
+    context 1024, KV cache float32, 4 threads, driven by board/bitnet_chat.py. Setup 1.33 s (model.bin 521011200 B
+    read into /dev/udmabuf0 in 1.11 s = 469 MB/s; 331 MB of head weights, scales and norms locked into RAM in 0.20 s).
+  RTX 4080: microsoft/bitnet-b1.58-2B-4T through transformers on torch 2.6.0+cu124 in bf16, greedy
+    (board/research/ternary/bitnet/quality_hf.py).
+  bitnet.cpp: /home/ubuntu/bitnet on the same KV260, ggml-model-i2_s.gguf, llama-cli --temp 0, 4 threads, context 2048
+    (board/research/ternary/bitnet/quality_bitnetcpp.py).
+  Chat template board/research/ternary/bitnet/bitnet_chat.jinja for all three; system message "You are a helpful
+    assistant."; the same max_new a prompt for all three.
+  The prompt token ids are identical on the board and the RTX 4080 for all 26 prompts; bitnet.cpp tokenises one id
+    longer everywhere (its own BOS handling).
+
+THE BATTERY (board/research/ternary/bitnet/quality_prompts.json: 26 prompts in 8 categories)
+  'must contain' is the battery's own metadata for a reader; the collection harness scored nothing against it, the
+    judges did. A prompt's own line breaks are shown as spaces on the '>' lines here and in the answers section (only
+    q16 has any).
+
+  q01_france         facts        max_new 64   repeats 1
+    > What is the capital of France?
+    must contain: Paris
+  q02_hamlet         facts        max_new 64   repeats 1
+    > Who wrote the play Hamlet?
+    must contain: William Shakespeare
+  q03_crc32          facts        max_new 160  repeats 1
+    > What is a CRC-32 checksum, and why does hardware compute it with a shift register? Answer in three sentences.
+    must contain: an error-detecting code / a checksum over data; polynomial division or a remainder; a shift register
+      with XOR taps does the division one bit a clock
+  q04_fpga           facts        max_new 160  repeats 1
+    > What is an FPGA?
+    must contain: a field-programmable gate array; a chip of programmable logic (lookup tables, flip-flops, routing)
+      configured after manufacture
+  q05_sky            facts        max_new 128  repeats 1
+    > Explain in two sentences why the sky is blue.
+    must contain: Rayleigh scattering; shorter (blue) wavelengths scatter more than longer (red) ones
+  q06_mul            arithmetic   max_new 128  repeats 1
+    > What is 17 times 23? Give the number.
+    must contain: 391
+  q07_divadd         arithmetic   max_new 128  repeats 1
+    > What is 144 divided by 12, plus 7?
+    must contain: 19 (144/12 = 12, 12 + 7 = 19)
+  q08_prime91        arithmetic   max_new 160  repeats 1
+    > Is 91 a prime number? Explain why or why not.
+    must contain: no, it is not prime; 91 = 7 x 13
+  q09_seq            arithmetic   max_new 96   repeats 1
+    > What is the next number in this sequence: 2, 4, 8, 16?
+    must contain: 32
+  q10_syllogism      reasoning    max_new 192  repeats 1
+    > All roses are flowers. Some flowers fade quickly. Does it follow that some roses fade quickly? Answer yes or no
+      and explain.
+    must contain: no, it does not follow; the flowers that fade quickly need not be the roses
+  q11_wordproblem    reasoning    max_new 192  repeats 1
+    > A train leaves at 9:15 and the journey takes 2 hours and 50 minutes. What time does it arrive?
+    must contain: 12:05
+  q12_sortsize       reasoning    max_new 128  repeats 1
+    > Sort these three things from smallest to largest: an elephant, a mouse, a horse.
+    must contain: mouse, horse, elephant, in that order
+  q13_onesentence    instructions max_new 96   repeats 1
+    > Answer in exactly one sentence: what does a transistor do?
+    must contain: exactly one sentence, about switching or amplifying current
+  q14_threeitems     instructions max_new 128  repeats 1
+    > Answer with a list of exactly three items: three uses of a shift register.
+    must contain: exactly three listed items
+  q15_yesno          instructions max_new 32   repeats 1
+    > Answer only with the word yes or no. Is water wet?
+    must contain: the single word yes or no, and nothing else
+  q16_summary        writing      max_new 160  repeats 1
+    > Summarise this paragraph in exactly two sentences.  A field-programmable gate array is a chip full of small
+      lookup tables and flip-flops joined by wires whose connections are set after the chip is made. A designer
+      describes the circuit they want, a tool works out which lookup table should hold which truth table and which
+      wires should be joined, and the result is written into the chip as a bitstream. Because the bitstream can be
+      replaced, the same silicon can be a video scaler in the morning and a network filter in the afternoon.
+    must contain: exactly two sentences covering programmable logic and reconfigurability
+  q17_haiku          writing      max_new 96   repeats 1
+    > Write a haiku about a circuit board.
+    must contain: three lines, about a circuit board
+  q18_shiftreg_child writing      max_new 160  repeats 1
+    > Explain what a shift register is to a ten-year-old child, in four lines.
+    must contain: four lines; the idea of bits stepping along one place at each tick
+  q19_reverse        code         max_new 192  repeats 1
+    > Write a Python function that reverses a string.
+    must contain: a def, and a reversal such as s[::-1] or reversed(s)
+  q20_forloop        code         max_new 160  repeats 1
+    > What does a for loop do in programming?
+    must contain: repeats a block of code, iterating over a sequence or a range
+  q21_nl_hoofdstad   dutch        max_new 96   repeats 1
+    > Wat is de hoofdstad van Nederland?
+    must contain: Amsterdam (Dutch is a weak language for BitNet b1.58 2B4T, which is trained mostly on English: a
+      poor Dutch answer is a fact about the model, not about the board)
+  q22_nl_uitleg      dutch        max_new 160  repeats 1
+    > Leg in twee zinnen uit wat een schuifregister is.
+    must contain: two Dutch sentences about a shift register (same caveat: the model is mostly English)
+  q23_long           robustness   max_new 256  repeats 1
+    > Write a detailed explanation, of at least three paragraphs, of how a computer adds two numbers together,
+      starting from a single full adder and building up to a 32-bit adder.
+    must contain: at least 200 generated tokens without falling into repetition
+  q24_determinism    robustness   max_new 128  repeats 2
+    > Name three things a shift register is used for.
+    must contain: with greedy decoding the two runs must produce byte-identical output
+  q25_emptyish       robustness   max_new 96   repeats 1
+    > ?
+    must contain: anything at all; this only has to not crash the runtime
+  q26_unicode        robustness   max_new 128  repeats 1
+    > What does the symbol ⊕ mean in mathematics, and what does µ stand for in µs? Also: 你好.
+    must contain: exclusive-or or direct sum for the first, micro (10^-6) for the second; the unusual code points must
+      survive the tokenizer, the runtime and the decoder
+
+ANSWERS, VERBATIM
+  Nothing is truncated: no answer in the battery ran past its max_new of 256 tokens. Each answer is quoted as the
+    model produced it; the model's own line breaks are kept and a line longer than this page is folded at one of its
+    spaces with the continuation indented (that space is the fold). No other character is added, removed or changed.
+  The head line of each way: prompt ids / generated ids, whether it stopped on its own EOS (id 128009) or hit the
+    max_new cap, and the measured prompt / generation tokens a second of that run.
+
+  --------------------------------------------------------------------------------------------------------------------
+  q01_france   facts   max_new 64
+    > What is the capital of France?
+    board      22 prompt ids, 8 generated, EOS; 14.99 / 8.97 tok/s
+      The capital of France is Paris.
+    RTX 4080   22 prompt ids, 8 generated, EOS; 12.82 tok/s generated
+      The capital of France is Paris.
+    bitnet.cpp 23 prompt ids, 8 generated, EOS; 4.54 / 3.20 tok/s
+      The capital of France is Paris.
+    board vs RTX 4080: generation IDENTICAL, 8 ids, same text
+  --------------------------------------------------------------------------------------------------------------------
+  q02_hamlet   facts   max_new 64
+    > Who wrote the play Hamlet?
+    board      22 prompt ids, 11 generated, EOS; 14.72 / 8.63 tok/s
+      The play Hamlet was written by William Shakespeare.
+    RTX 4080   22 prompt ids, 11 generated, EOS; 20.93 tok/s generated
+      The play Hamlet was written by William Shakespeare.
+    bitnet.cpp 23 prompt ids, 11 generated, EOS; 4.57 / 3.09 tok/s
+      The play Hamlet was written by William Shakespeare.
+    board vs RTX 4080: generation IDENTICAL, 11 ids, same text
+  --------------------------------------------------------------------------------------------------------------------
+  q03_crc32   facts   max_new 160
+    > What is a CRC-32 checksum, and why does hardware compute it with a shift register? Answer in three sentences.
+    board      39 prompt ids, 65 generated, EOS; 14.78 / 7.92 tok/s
+      A CRC-32 checksum is a type of error-detecting code used to verify data integrity. It is computed by hardware
+        using a shift register because it efficiently processes the data in a cyclic manner, allowing for quick and
+        accurate calculation of the checksum. This method is particularly effective in detecting single-bit errors in
+        digital data.
+    RTX 4080   39 prompt ids, 69 generated, EOS; 21.25 tok/s generated
+      A CRC-32 checksum is a type of error-detecting code used to verify data integrity. It is computed by hardware
+        using a shift register because it efficiently processes the data in a cyclic manner, allowing for quick and
+        accurate calculation of the checksum. This method is particularly useful in embedded systems and communication
+        protocols where speed and reliability are critical.
+    bitnet.cpp 40 prompt ids, 70 generated, EOS; 4.62 / 2.73 tok/s
+      A CRC-32 checksum is a type of error-detecting code used to verify the integrity of data. It's computed by a
+        hardware-based algorithm that uses a shift register to perform bitwise operations. This process involves
+        dividing the data into blocks, computing a polynomial remainder for each block, and then combining these
+        remainders to produce the final checksum.
+    board vs RTX 4080: first divergent generated token at position 54 (board 65 ids, RTX 4080 69 ids)
+  --------------------------------------------------------------------------------------------------------------------
+  q04_fpga   facts   max_new 160
+    > What is an FPGA?
+    board      20 prompt ids, 156 generated, EOS; 15.07 / 7.66 tok/s
+      An FPGA, or Field-Programmable Gate Array, is a type of integrated circuit that can be programmed to perform a
+        wide range of digital logic functions. It is a semiconductor device that can be configured after manufacturing
+        to perform specific tasks, making it highly flexible and adaptable.
+
+      FPGAs are typically composed of a large number of small, configurable logic blocks that can be connected
+        together to create complex circuits. They are often used in applications that require high-speed data
+        processing, such as digital signal processing, image processing, and telecommunications.
+
+      FPGAs are popular in various industries, including automotive, aerospace, and consumer electronics, due to their
+        ability to be customized to meet specific requirements. They are also used in research and development,
+        particularly in fields like artificial intelligence and machine learning.
+    RTX 4080   20 prompt ids, 160 generated, hit the cap; 21.19 tok/s generated
+      An FPGA, or Field-Programmable Gate Array, is a type of integrated circuit that can be programmed to perform a
+        wide range of digital logic functions. It is a semiconductor device that can be configured to perform specific
+        tasks, making it highly versatile and adaptable.
+
+      FPGAs are typically composed of a large number of small, configurable logic blocks that can be connected
+        together to create complex circuits. They are often used in applications such as digital signal processing,
+        data acquisition, and real-time control systems.
+
+      FPGAs have several advantages over other types of digital circuits, including:
+
+      1. Flexibility: FPGAs can be reconfigured to perform different tasks, making them ideal for prototyping and
+        testing.
+      2. Speed: FPGAs can perform tasks at high speeds, making them suitable for applications
+    bitnet.cpp 21 prompt ids, 160 generated, hit the cap; 4.54 / 2.48 tok/s
+      An FPGA, or Field-Programmable Gate Array, is a type of integrated circuit that can be programmed to function as
+        a digital logic block or processor. It is a semiconductor device that can be configured after manufacturing to
+        perform a wide range of digital logic functions.
+
+      FPGAs are used in a variety of applications, including digital signal processing, data acquisition, and control
+        systems. They are particularly useful in situations where a fixed hardware design is not feasible or
+        cost-effective.
+
+      FPGAs are made up of a large number of small, configurable logic blocks that can be connected together to create
+        complex digital circuits. They are often used in conjunction with software to create custom hardware
+        solutions.
+
+      FPGAs are popular in fields such as telecommunications, aerospace, automotive, and medical devices. They are
+        also
+    board vs RTX 4080: first divergent generated token at position 41 (board 156 ids, RTX 4080 160 ids)
+  --------------------------------------------------------------------------------------------------------------------
+  q05_sky   facts   max_new 128
+    > Explain in two sentences why the sky is blue.
+    board      25 prompt ids, 46 generated, EOS; 14.94 / 8.22 tok/s
+      The sky appears blue because of the way sunlight interacts with the Earth's atmosphere. Shorter blue wavelengths
+        of light are scattered in all directions by the gases and particles in the atmosphere, making the sky look
+        blue to our eyes.
+    RTX 4080   25 prompt ids, 43 generated, EOS; 20.94 tok/s generated
+      The sky appears blue because of the way sunlight interacts with the Earth's atmosphere. Shorter blue wavelengths
+        of light are scattered in all directions by the gases and particles in the atmosphere, making the sky look
+        blue.
+    bitnet.cpp 26 prompt ids, 54 generated, EOS; 3.23 / 2.73 tok/s
+      The sky appears blue because of a phenomenon called Rayleigh scattering. This occurs when sunlight enters
+        Earth's atmosphere and is scattered in all directions by the gases and particles in the air. Blue light is
+        scattered more than other colors because it travels in shorter, smaller waves.
+    board vs RTX 4080: first divergent generated token at position 41 (board 46 ids, RTX 4080 43 ids)
+  --------------------------------------------------------------------------------------------------------------------
+  q06_mul   arithmetic   max_new 128
+    > What is 17 times 23? Give the number.
+    board      27 prompt ids, 9 generated, EOS; 15.03 / 8.51 tok/s
+      17 times 23 equals 391.
+    RTX 4080   27 prompt ids, 9 generated, EOS; 20.77 tok/s generated
+      17 times 23 equals 391.
+    bitnet.cpp 28 prompt ids, 9 generated, EOS; 4.61 / 3.14 tok/s
+      17 times 23 equals 391.
+    board vs RTX 4080: generation IDENTICAL, 9 ids, same text
+  --------------------------------------------------------------------------------------------------------------------
+  q07_divadd   arithmetic   max_new 128
+    > What is 144 divided by 12, plus 7?
+    board      28 prompt ids, 44 generated, EOS; 14.79 / 8.23 tok/s
+      To solve this problem, you first need to divide 144 by 12, which equals 12. Then, you add 7 to the result, which
+        gives you 12 + 7 = 19.
+    RTX 4080   28 prompt ids, 44 generated, EOS; 21.03 tok/s generated
+      To solve this problem, you first need to divide 144 by 12, which equals 12. Then, you add 7 to the result, which
+        gives you 12 + 7 = 19.
+    bitnet.cpp 29 prompt ids, 29 generated, EOS; 4.13 / 2.37 tok/s
+      First, divide 144 by 12, which equals 12. Then, add 7 to 12, which equals 19.
+    board vs RTX 4080: generation IDENTICAL, 44 ids, same text
+  --------------------------------------------------------------------------------------------------------------------
+  q08_prime91   arithmetic   max_new 160
+    > Is 91 a prime number? Explain why or why not.
+    board      28 prompt ids, 90 generated, EOS; 14.86 / 7.86 tok/s
+      No, 91 is not a prime number. A prime number is a positive integer greater than 1 that has no positive divisors
+        other than 1 and itself. In the case of 91, its divisors are 1, 7, and 13, which are all less than 91.
+        Therefore, 91 can be divided by these numbers without leaving a remainder, making it a composite number rather
+        than a prime number.
+    RTX 4080   28 prompt ids, 90 generated, EOS; 21.03 tok/s generated
+      No, 91 is not a prime number. A prime number is a positive integer greater than 1 that has no positive divisors
+        other than 1 and itself. In the case of 91, its divisors are 1, 7, and 13, which are all less than 91.
+        Therefore, 91 can be divided by these numbers without leaving a remainder, making it a composite number rather
+        than a prime number.
+    bitnet.cpp 29 prompt ids, 73 generated, EOS; 4.59 / 2.78 tok/s
+      No, 91 is not a prime number. A prime number is a natural number greater than 1 that has no positive divisors
+        other than 1 and itself.
+
+      91 can be divided by 1, 7, 13, and 91. Therefore, it has more than two divisors, which means it is not a prime
+        number.
+    board vs RTX 4080: generation IDENTICAL, 90 ids, same text
+  --------------------------------------------------------------------------------------------------------------------
+  q09_seq   arithmetic   max_new 96
+    > What is the next number in this sequence: 2, 4, 8, 16?
+    board      36 prompt ids, 36 generated, EOS; 14.76 / 7.90 tok/s
+      The next number in the sequence is 32. This is because each number is obtained by multiplying the previous
+        number by 2, which is a characteristic of a geometric sequence.
+    RTX 4080   36 prompt ids, 36 generated, EOS; 20.99 tok/s generated
+      The next number in the sequence is 32. This is because each number is obtained by multiplying the previous
+        number by 2, which is a characteristic of a geometric sequence.
+    bitnet.cpp 37 prompt ids, 42 generated, EOS; 4.61 / 2.71 tok/s
+      The next number in the sequence would be 32. This is because each number in the sequence is obtained by
+        multiplying the previous number by 2. So, 16 * 2 = 32.
+    board vs RTX 4080: generation IDENTICAL, 36 ids, same text
+  --------------------------------------------------------------------------------------------------------------------
+  q10_syllogism   reasoning   max_new 192
+    > All roses are flowers. Some flowers fade quickly. Does it follow that some roses fade quickly? Answer yes or no
+      and explain.
+    board      41 prompt ids, 95 generated, EOS; 14.43 / 7.76 tok/s
+      Yes, it follows that some roses fade quickly.
+
+      The statement "All roses are flowers" establishes a relationship between roses and flowers, meaning that every
+        rose is a flower. The statement "Some flowers fade quickly" indicates that there is a subset of flowers that
+        fade quickly. Since roses are a subset of flowers, it logically follows that some roses (specifically, all
+        roses) would also fade quickly, as they are included in the subset of flowers that fade quickly.
+    RTX 4080   41 prompt ids, 53 generated, EOS; 21.05 tok/s generated
+      Yes, it follows that some roses fade quickly. This is because all roses are flowers, and some flowers fade
+        quickly. Since roses are a type of flower, it is reasonable to conclude that some roses, as a subset of
+        flowers, would also fade quickly.
+    bitnet.cpp 42 prompt ids, 82 generated, EOS; 4.61 / 2.78 tok/s
+      Yes, it does follow that some roses fade quickly.
+
+      The statement "All roses are flowers" establishes a relationship between roses and flowers, meaning that every
+        rose is a flower. The statement "Some flowers fade quickly" indicates that there is a subset of flowers that
+        fade quickly. Since roses are a subset of flowers, it logically follows that some roses (which are also
+        flowers) would also fade quickly.
+    board vs RTX 4080: first divergent generated token at position 10 (board 95 ids, RTX 4080 53 ids)
+  --------------------------------------------------------------------------------------------------------------------
+  q11_wordproblem   reasoning   max_new 192
+    > A train leaves at 9:15 and the journey takes 2 hours and 50 minutes. What time does it arrive?
+    board      41 prompt ids, 106 generated, EOS; 14.57 / 7.78 tok/s
+      To find the arrival time, we need to add the journey duration to the departure time.
+
+      The train departs at 9:15, and the journey takes 2 hours and 50 minutes.
+
+      First, add the 2 hours to the departure time: 9:15 + 2 hours = 11:15.
+
+      Next, add the 50 minutes to the new time: 11:15 + 50 minutes = 12:05.
+
+      So, the train arrives at 12:05.
+    RTX 4080   41 prompt ids, 109 generated, EOS; 21.06 tok/s generated
+      To find the arrival time, we need to add the duration of the journey to the departure time.
+
+      The train departs at 9:15, and the journey takes 2 hours and 50 minutes.
+
+      First, add the 2 hours to the departure time: 9:15 + 2 hours = 11:15.
+
+      Next, add the remaining 50 minutes to the new time: 11:15 + 50 minutes = 12:05.
+
+      So, the train arrives at 12:05.
+    bitnet.cpp 42 prompt ids, 161 generated, EOS; 4.62 / 2.70 tok/s
+      To find out the arrival time, we need to add the duration of the journey to the departure time.
+
+      1. Convert the journey time to minutes: 2 hours and 50 minutes = 2*60 + 50 = 170 minutes.
+      2. Add the journey time to the departure time: 9:15 + 170 minutes.
+
+      First, add the minutes: 15 minutes + 170 minutes = 185 minutes.
+
+      Since there are 60 minutes in an hour, we convert 185 minutes to hours and minutes: 185 minutes = 3 hours and 5
+        minutes.
+
+      Now, add this to the departure time: 9:15 + 3 hours and 5 minutes = 12:20.
+
+      So, the train arrives at 12:20.
+    board vs RTX 4080: first divergent generated token at position 11 (board 106 ids, RTX 4080 109 ids)
+  --------------------------------------------------------------------------------------------------------------------
+  q12_sortsize   reasoning   max_new 128
+    > Sort these three things from smallest to largest: an elephant, a mouse, a horse.
+    board      33 prompt ids, 12 generated, EOS; 14.58 / 8.37 tok/s
+      1. Mouse
+      2. Horse
+      3. Elephant
+    RTX 4080   33 prompt ids, 10 generated, EOS; 20.82 tok/s generated
+      A mouse, an elephant, a horse.
+    bitnet.cpp 34 prompt ids, 10 generated, EOS; 4.61 / 3.09 tok/s
+      A mouse, a horse, an elephant.
+    board vs RTX 4080: first divergent generated token at position 0 (board 12 ids, RTX 4080 10 ids)
+  --------------------------------------------------------------------------------------------------------------------
+  q13_onesentence   instructions   max_new 96
+    > Answer in exactly one sentence: what does a transistor do?
+    board      27 prompt ids, 28 generated, EOS; 14.85 / 8.11 tok/s
+      A transistor acts as a switch or an amplifier in electronic circuits, controlling the flow of current and
+        increasing or decreasing the strength of signals.
+    RTX 4080   27 prompt ids, 20 generated, EOS; 20.91 tok/s generated
+      A transistor acts as an electronic switch or amplifier, controlling the flow of current in a circuit.
+    bitnet.cpp 28 prompt ids, 20 generated, EOS; 4.60 / 2.94 tok/s
+      A transistor acts as a switch or an amplifier in electronic circuits, controlling the flow of current.
+    board vs RTX 4080: first divergent generated token at position 4 (board 28 ids, RTX 4080 20 ids)
+  --------------------------------------------------------------------------------------------------------------------
+  q14_threeitems   instructions   max_new 128
+    > Answer with a list of exactly three items: three uses of a shift register.
+    board      31 prompt ids, 19 generated, EOS; 14.91 / 8.30 tok/s
+      1. Data storage and retrieval
+      2. Counting and sequencing
+      3. Serial communication
+    RTX 4080   31 prompt ids, 19 generated, EOS; 21.02 tok/s generated
+      1. Data storage and retrieval
+      2. Counting and sequencing
+      3. Serial communication
+    bitnet.cpp 32 prompt ids, 106 generated, EOS; 4.36 / 2.77 tok/s
+      1. Data storage: Shift registers are used to store binary data, which can be used in various applications such
+        as digital signal processing, memory devices, and data transmission.
+
+      2. Counting: Shift registers can be used to count from 0 to a certain maximum value. This is useful in
+        applications like digital clocks, timers, and other control systems.
+
+      3. Serial communication: Shift registers are used in serial communication systems to shift data from one bit to
+        the next, allowing for the transmission of data over a single line.
+    board vs RTX 4080: generation IDENTICAL, 19 ids, same text
+  --------------------------------------------------------------------------------------------------------------------
+  q15_yesno   instructions   max_new 32
+    > Answer only with the word yes or no. Is water wet?
+    board      28 prompt ids, 3 generated, EOS; 14.93 / 9.61 tok/s
+      No.
+    RTX 4080   28 prompt ids, 3 generated, EOS; 20.17 tok/s generated
+      No.
+    bitnet.cpp 29 prompt ids, 3 generated, EOS; 4.59 / 4.15 tok/s
+      No.
+    board vs RTX 4080: generation IDENTICAL, 3 ids, same text
+  --------------------------------------------------------------------------------------------------------------------
+  q16_summary   writing   max_new 160
+    > Summarise this paragraph in exactly two sentences.  A field-programmable gate array is a chip full of small
+      lookup tables and flip-flops joined by wires whose connections are set after the chip is made. A designer
+      describes the circuit they want, a tool works out which lookup table should hold which truth table and which
+      wires should be joined, and the result is written into the chip as a bitstream. Because the bitstream can be
+      replaced, the same silicon can be a video scaler in the morning and a network filter in the afternoon.
+    board      124 prompt ids, 77 generated, EOS; 12.49 / 7.15 tok/s
+      A field-programmable gate array (FPGA) is a chip with small lookup tables and flip-flops connected by wires,
+        which can be programmed after manufacturing. A designer specifies the desired circuit, and a tool determines
+        the appropriate lookup tables and connections, allowing the same silicon to be used for different purposes,
+        such as video scaling in the morning and network filtering in the afternoon.
+    RTX 4080   124 prompt ids, 77 generated, EOS; 21.03 tok/s generated
+      A field-programmable gate array (FPGA) is a chip with small lookup tables and flip-flops connected by wires,
+        which can be programmed after manufacturing. A designer specifies the desired circuit, and a tool determines
+        the appropriate lookup tables and connections, allowing the same silicon to be used for different purposes,
+        such as video scaling in the morning and network filtering in the afternoon.
+    bitnet.cpp 125 prompt ids, 60 generated, EOS; 4.58 / 2.71 tok/s
+      A field-programmable gate array (FPGA) is a chip composed of small lookup tables and flip-flops connected by
+        wires that can be programmed after manufacturing. This allows the same silicon to be used for different
+        purposes, such as video scaling in the morning and network filtering in the afternoon.
+    board vs RTX 4080: generation IDENTICAL, 77 ids, same text
+  --------------------------------------------------------------------------------------------------------------------
+  q17_haiku   writing   max_new 96
+    > Write a haiku about a circuit board.
+    board      24 prompt ids, 21 generated, EOS; 14.93 / 8.35 tok/s
+      Silicon dreams take flight,
+      Wires weave through circuits bright,
+      Tech's heartbeat, pure light.
+    RTX 4080   24 prompt ids, 23 generated, EOS; 20.90 tok/s generated
+      Silicon dreams take flight,
+      Wires weave through circuits' heart,
+      Tech's pulse, a silent song.
+    bitnet.cpp 25 prompt ids, 23 generated, EOS; 4.57 / 2.92 tok/s
+      Silicon dreams take flight,
+      Wires weave through circuits' heart,
+      Silent, yet alive.
+    board vs RTX 4080: first divergent generated token at position 11 (board 21 ids, RTX 4080 23 ids)
+  --------------------------------------------------------------------------------------------------------------------
+  q18_shiftreg_child   writing   max_new 160
+    > Explain what a shift register is to a ten-year-old child, in four lines.
+    board      32 prompt ids, 57 generated, EOS; 14.72 / 8.06 tok/s
+      A shift register is like a toy train track that moves things from one end to the other. It helps store and
+        change information, like numbers or letters, in a fun way. It's like a secret box where you can put things in
+        and take them out in different orders.
+    RTX 4080   32 prompt ids, 47 generated, EOS; 21.25 tok/s generated
+      A shift register is like a toy train track. It moves things from one end to the other, but it can also change
+        the order of the things it moves. It's used in computers to help with counting and storing information.
+    bitnet.cpp 33 prompt ids, 54 generated, EOS; 4.61 / 2.81 tok/s
+      A shift register is like a toy train track. It moves things from one end to the other. It can hold more things
+        at once, and when it's full, it shifts them to the other end. It's used in computers to store and move data.
+    board vs RTX 4080: first divergent generated token at position 9 (board 57 ids, RTX 4080 47 ids)
+  --------------------------------------------------------------------------------------------------------------------
+  q19_reverse   code   max_new 192
+    > Write a Python function that reverses a string.
+    board      25 prompt ids, 114 generated, EOS; 14.95 / 7.76 tok/s
+      Here's a simple Python function that reverses a string:
+
+      ```python
+      def reverse_string(s):
+          return s[::-1]
+      ```
+
+      This function uses Python's slice notation to create a reversed copy of the string. The `[::-1]` slice means
+        "start at the end of the string and end at position 0, move with the step -1", effectively reversing the
+        string.
+
+      You can use this function like this:
+
+      ```python
+      print(reverse_string("Hello, World!"))  # Outputs: "!dlroW ,olleH"
+      ```
+    RTX 4080   25 prompt ids, 115 generated, EOS; 21.11 tok/s generated
+      Here's a simple Python function that reverses a string:
+
+      ```python
+      def reverse_string(s):
+          return s[::-1]
+      ```
+
+      This function uses Python's slice notation to create a reversed copy of the input string. The `[::-1]` slice
+        means "start at the end of the string and end at position 0, move with the step -1", effectively reversing the
+        string.
+
+      You can use this function like this:
+
+      ```python
+      print(reverse_string("Hello, World!"))  # Outputs:!dlroW,olleH
+      ```
+    bitnet.cpp 26 prompt ids, 104 generated, EOS; 4.26 / 2.75 tok/s
+      Sure, here is a simple Python function that reverses a string:
+
+      ```python
+      def reverse_string(s):
+          return s[::-1]
+
+      # Example usage:
+      print(reverse_string("Hello, World!"))  # Outputs: !dlroW ,olleH
+      ```
+
+      This function uses Python's slice notation `s[::-1]` to reverse the string. The `[::-1]` slice means "start at
+        the end of the string and end at position 0, move with the step -1".
+    board vs RTX 4080: first divergent generated token at position 42 (board 114 ids, RTX 4080 115 ids)
+    board repetition record: 69 words, 11 sentences, 9 distinct, 2 duplicated, longest block repeated back to back 0
+      words
+      duplicated x2: "```python"
+      duplicated x2: "```"
+  --------------------------------------------------------------------------------------------------------------------
+  q20_forloop   code   max_new 160
+    > What does a for loop do in programming?
+    board      24 prompt ids, 160 generated, hit the cap; 14.85 / 7.64 tok/s
+      A for loop is a control structure in programming that allows you to execute a block of code repeatedly for a
+        specified number of iterations. It is typically used when you need to perform a task multiple times, such as
+        iterating over a list, array, or other data structure.
+
+      Here's a basic example in Python:
+
+      ```python
+      for i in range(5):
+          print(i)
+      ```
+
+      In this example, the loop will print numbers from 0 to 4. The `range(5)` function generates a sequence of
+        numbers from 0 to 4, and the loop iterates over this sequence.
+
+      For loops can also take a condition as an argument, allowing you to control when the loop should stop:
+
+      ```python
+      for i in range(5):
+          if i == 3:
+
+    RTX 4080   24 prompt ids, 160 generated, hit the cap; 21.18 tok/s generated
+      A for loop is a control structure in programming that allows you to execute a block of code repeatedly for a
+        specified number of times. It is typically used to iterate over a sequence, such as a list, array, or string,
+        and perform a specific action on each element.
+
+      Here's a general syntax for a for loop:
+
+      for (initialization; condition; increment) {
+        // code to be executed
+      }
+
+      - Initialization: This is the initial value of the loop variable.
+      - Condition: This is the condition that determines when the loop should stop.
+      - Increment: This is the value that is added to the loop variable after each iteration.
+
+      For example, in Python, a for loop can be used to iterate over a list of numbers:
+
+      for number in numbers:
+        print(number)
+
+      In this
+    bitnet.cpp 25 prompt ids, 160 generated, hit the cap; 4.58 / 2.59 tok/s
+      A for loop is a control flow statement in programming that allows you to execute a block of code repeatedly for
+        a specified number of times. It is used to iterate over a sequence (such as a list, tuple, or string) or other
+        iterable objects.
+
+      Here's a basic example in Python:
+
+      ```python
+      for i in range(5):
+          print(i)
+      ```
+
+      In this example, the loop will print numbers from 0 to 4. The `range(5)` function generates a sequence of
+        numbers from 0 to 4, and the loop iterates over this sequence.
+
+      For loops can also be used with other iterable objects, such as lists or dictionaries:
+
+      ```python
+      fruits = ['apple', 'banana', 'cherry']
+      for fruit in fruits:
+          print
+    board vs RTX 4080: first divergent generated token at position 24 (board 160 ids, RTX 4080 160 ids)
+    board repetition record: 121 words, 13 sentences, 11 distinct, 2 duplicated, longest block repeated back to back 0
+      words
+      duplicated x2: "```python"
+      duplicated x2: "for i in range(5):"
+  --------------------------------------------------------------------------------------------------------------------
+  q21_nl_hoofdstad   dutch   max_new 96
+    > Wat is de hoofdstad van Nederland?
+    board      24 prompt ids, 83 generated, EOS; 14.56 / 7.90 tok/s
+      De hoofdstad van Nederland is Amsterdam. Amsterdam is een groot stad in Nederland, met een populestat van meer
+        dan 1.5 miljoen mensen. Het stad is bekend om haar kantine, herinneren, herinneren en het centrum. Amsterdam
+        is een very bekend stad met een grote kantine, een centrum met een grote kant en een grote park.
+    RTX 4080   24 prompt ids, 73 generated, EOS; 21.00 tok/s generated
+      De hoofdstad van Nederland is Amsterdam. Amsterdam is de eerste stad in Nederland, en het is een very bekend
+        stad met een grote port en een grote stedelijk museum. Het stad heeft een very bekend culturele en
+        kultuurgebied, met grote kantine, kantine met kantine en een grote stedelijk museum.
+    bitnet.cpp 25 prompt ids, 96 generated, hit the cap; 4.56 / 2.80 tok/s
+      De hoofdstad van Nederland is Amsterdam. Amsterdam is de eerste stad in Nederland, en het is een very bekend
+        stad met een grote port en een grote centraal. Het stad is bekend om haar culturele en kultuurgegevens, zoals
+        het Rijksmuseum, het Rijksmuseumgebouw, en het Roodhof. Amsterdam is ook bekend voor zijn kanaalgebied, wat
+        een mooie en bekend
+    board vs RTX 4080: first divergent generated token at position 11 (board 83 ids, RTX 4080 73 ids)
+  --------------------------------------------------------------------------------------------------------------------
+  q22_nl_uitleg   dutch   max_new 160
+    > Leg in twee zinnen uit wat een schuifregister is.
+    board      29 prompt ids, 160 generated, hit the cap; 14.61 / 7.11 tok/s
+      Zijn er een schuifregister in twee zinnen?
+
+      1. **Zie je de zinnen in een document of een boek:**
+         - Zie de zinnen in een document of een boek die een schuifregister is. Zie de zinnen in een boek of een
+        document die een schuifregister is.
+
+      2. **Identifici de zinnen:**
+         - Zie de zinnen in een boek of een document die een schuifregister is.
+
+      3. **Verzoek naar de zinnen:**
+         - Zie de zinnen in een boek of een document die een schuifregister is.
+
+      4. **Verzoek naar de zinnen:**
+         - Zie de z
+    RTX 4080   29 prompt ids, 160 generated, hit the cap; 21.02 tok/s generated
+      Een schuifregister is een documentatiek dat bij de verkeersregister wordt gegeven om de naam van een schuif en
+        de informatie over het schuif in het verkeersregister te besturen. Deze register is ook bekend als de
+        "Schuifregister" of "Schuifregister".
+
+      Een schuifregister maakt gebruik van de volgende informatie:
+
+      1. ** naam van de schuif**: de naam van de schuif die in de register wordt gegeven.
+      2. **uitgevers**: de naam van de uitgevers die de schuif ontien.
+      3. **uitgeversgegevens**: de naam van de uitgevers, de naam van de schuif en de
+    bitnet.cpp 30 prompt ids, 160 generated, hit the cap; 4.58 / 2.69 tok/s
+      Een schuifregister is een documentatiek dat wordt gebruikt om de toegang te schuiven. Deze register is geplaatst
+        door de toegang van de schuiven, waaronder de toegang naar de schuiven, de toegang naar de toegang, de toegang
+        naar de toegang, de toegang naar de toegang, de toegang naar de toegang, de toegang naar de toegang, de
+        toegang naar de toegang, de toegang naar de toegang, de toegang naar de toegang, de toegang naar de toegang,
+        de toegang naar de toegang, de toegang
+    board vs RTX 4080: first divergent generated token at position 0 (board 160 ids, RTX 4080 160 ids)
+    board repetition record: 91 words, 14 sentences, 12 distinct, 2 duplicated, longest block repeated back to back 0
+      words
+      duplicated x2: "- Zie de zinnen in een boek of een document die een schuifregister is."
+      duplicated x2: "**Verzoek naar de zinnen:**"
+  --------------------------------------------------------------------------------------------------------------------
+  q23_long   robustness   max_new 256
+    > Write a detailed explanation, of at least three paragraphs, of how a computer adds two numbers together,
+      starting from a single full adder and building up to a 32-bit adder.
+    board      53 prompt ids, 256 generated, hit the cap; 14.41 / 7.12 tok/s
+      To understand how a computer adds two numbers together, we need to start with the basic building blocks of
+        digital arithmetic: the full adder. A full adder takes three inputs: two bits and a carry-in bit. It produces
+        two outputs: a sum bit and a carry-out bit. The sum bit is the result of the XOR operation between the two
+        input bits and the carry-in bit. The carry-out bit is the result of the AND operation between the two input
+        bits and the carry-in bit. This simple operation forms the foundation for more complex addition algorithms.
+
+      Once we have a full adder, we can build more complex adders by combining them. For example, a 2-bit adder can be
+        constructed by connecting two full adders in series, where the carry-out of one full adder is the carry-in of
+        the next. This process is repeated to create 4-bit, 8-bit, and so on, up to 32-bit adders. Each additional bit
+        adds more complexity, but also increases the range of numbers that can be represented. For instance, a 32-bit
+        adder can handle numbers from -2^31 to 2^31 - 1, which is a vast range compared to a 16-bit adder.
+
+      To
+    RTX 4080   53 prompt ids, 256 generated, hit the cap; 20.96 tok/s generated
+      To understand how a computer adds two numbers together, we need to start with the basic building blocks of
+        digital arithmetic: the full adder. A full adder takes three inputs: two bits and a carry-in bit. It produces
+        two outputs: a sum bit and a carry-out bit. The sum bit is the result of the XOR operation between the two
+        input bits and the carry-in bit. The carry-out bit is the result of the AND operation between the two input
+        bits and the carry-in bit. This process can be represented mathematically as:
+
+      - Sum = (A XOR B) AND (A AND B)
+      - Carry-out = (A AND B) XOR (A XOR B)
+
+      The full adder is then used to create a 2-bit adder, which takes two 1-bit inputs and produces a 2-bit output.
+        This 2-bit adder is essentially a full adder with the carry-out bit discarded. The 2-bit adder can be
+        represented as:
+
+      - Sum = (A XOR B) AND (A AND B)
+      - Carry-out = (A AND B) XOR (A XOR B)
+
+      Next, we build up to a 4-bit adder. A 4-bit adder is a 2-bit adder
+    bitnet.cpp 54 prompt ids, 256 generated, hit the cap; 4.62 / 2.65 tok/s
+      The process of adding two numbers together in a computer begins with the simplest unit of addition, the full
+        adder. A full adder takes three inputs: two bits and a carry bit. It outputs a sum bit and a carry bit. The
+        sum bit is the result of the XOR operation between the two input bits and the carry bit. The carry bit is the
+        result of the AND operation between the two input bits and the carry bit. This is the basic building block for
+        more complex addition operations.
+
+      Moving forward, we have the half adder, which is essentially a full adder with one of its inputs tied to the
+        carry bit of the previous stage. This allows the half adder to add two single bits and produce a sum and a
+        carry bit. The carry bit from the previous stage is also used to produce the carry bit for the next stage.
+
+      The full adder is then combined with the half adder to form the full adder-subtractor. This unit can add two
+        single bits and produce a sum and a carry bit. The carry bit from the previous stage is also used to produce
+        the carry bit for the next stage. This is the basic unit for more complex addition operations.
+
+      The next step is the full adder-subtractor, which is a full add
+    board vs RTX 4080: first divergent generated token at position 102 (board 256 ids, RTX 4080 256 ids)
+  --------------------------------------------------------------------------------------------------------------------
+  q24_determinism   robustness   max_new 128
+    > Name three things a shift register is used for.
+    board      25 prompt ids (run 1), 20 generated, EOS; 15.04 / 8.46 tok/s
+               25 prompt ids (run 2), 20 generated, EOS; 14.88 / 8.09 tok/s
+      A shift register is used for storing binary data, performing arithmetic operations, and generating serial
+        numbers.
+      the two runs: identical text true, identical generated ids true (20 and 20 ids)
+    RTX 4080   25 prompt ids (run 1), 20 generated, EOS; 20.35 tok/s generated
+               25 prompt ids (run 2), 20 generated, EOS; 20.74 tok/s generated
+      A shift register is used for storing binary data, performing arithmetic operations, and generating serial
+        numbers.
+      the two runs: identical text true, identical generated ids true (20 and 20 ids)
+    bitnet.cpp 26 prompt ids (run 1), 128 generated, hit the cap; 4.58 / 2.73 tok/s
+               26 prompt ids (run 2), 128 generated, hit the cap; 4.56 / 2.74 tok/s
+      1. Data storage: A shift register is used to store data temporarily. It can hold a sequence of bits or bytes of
+        data, and can shift this data left or right to make room for new data.
+
+      2. Data transmission: Shift registers are used in digital communication systems to transmit data. They can shift
+        data from one register to another, allowing for efficient transmission of data.
+
+      3. Counting: Shift registers can be used to count the number of times a particular event has occurred. They can
+        shift the data left or right to keep track of the count, and can be used in various applications such as
+        digital clocks, timers, and
+      the two runs: identical text true, identical generated ids true (128 and 128 ids)
+    board generated ids, both runs: 32, 6541, 4254, 374, 1511, 369, 28672, 8026, 828, 11, 16785, 35884, 7677, 11, 323,
+      24038, 6275, 5219, 13, 128009
+    RTX 4080 generated ids, both runs: 32, 6541, 4254, 374, 1511, 369, 28672, 8026, 828, 11, 16785, 35884, 7677, 11,
+      323, 24038, 6275, 5219, 13, 128009
+    board vs RTX 4080: generation IDENTICAL, 20 ids, same text
+  --------------------------------------------------------------------------------------------------------------------
+  q25_emptyish   robustness   max_new 96
+    > ?
+    board      16 prompt ids, 24 generated, EOS; 15.10 / 8.44 tok/s
+      It looks like your question got cut off. Could you please provide more details or clarify what you need help
+        with?
+    RTX 4080   16 prompt ids, 24 generated, EOS; 21.08 tok/s generated
+      It looks like your question got cut off. Could you please provide more details or clarify what you need help
+        with?
+    bitnet.cpp 17 prompt ids, 29 generated, EOS; 4.49 / 2.87 tok/s
+      I'm here to help!
+    board vs RTX 4080: generation IDENTICAL, 24 ids, same text
+  --------------------------------------------------------------------------------------------------------------------
+  q26_unicode   robustness   max_new 128
+    > What does the symbol ⊕ mean in mathematics, and what does µ stand for in µs? Also: 你好.
+    board      40 prompt ids, 105 generated, EOS; 14.81 / 7.85 tok/s
+      The symbol ⊕ is known as the "plus" or "addition" symbol in mathematics. It represents the operation of adding
+        two numbers together.
+
+      The symbol µ (mu) is used in mathematics to represent the Greek letter mu, which is the 13th letter of the Greek
+        alphabet. It is often used in mathematical contexts, particularly in statistics and probability theory, to
+        denote the population mean or the expected value of a random variable.
+
+      你好 (nǐ hǎo) means "hello" in Chinese.
+    RTX 4080   40 prompt ids, 128 generated, hit the cap; 21.15 tok/s generated
+      In mathematics, the symbol ⊕ is known as the "plus" or "addition" symbol, and it represents the operation of
+        adding two numbers together. For example, 3 ⊕ 4 means 3 + 4 = 7.
+
+      In the context of the Greek letter µ (mu), it is used to represent the symbol for "mu" in mathematics. The Greek
+        letter µ is often used in various mathematical contexts, such as in probability theory, statistics, and
+        calculus. It is commonly used to represent the population mean or the expected value of a random variable.
+
+      As for "你好" (nǐ hǎ
+    bitnet.cpp 41 prompt ids, 92 generated, EOS; 4.61 / 2.73 tok/s
+      In mathematics, the symbol ⊕ is often used to represent the operation of addition. For example, in the
+        expression 3 ⊕ 2, it means 3 + 2.
+
+      In the context of the Greek letter µ (mu), it is used to represent the symbol for micro in the International
+        System of Units (SI). So, µs stands for microsecond, which is a unit of time equal to one millionth of a
+        second.
+    board vs RTX 4080: first divergent generated token at position 0 (board 105 ids, RTX 4080 128 ids)
+  --------------------------------------------------------------------------------------------------------------------
+
+THE JUDGES' VERDICTS
+  Four judging agents, each given two categories, the three answers a prompt, the token ids, the divergence positions
+    and the repetition records. sense: 3 = coherent and on topic, 2 = partly degraded, 1 = degenerate or gibberish.
+    'vs reference' compares the board's answer with the RTX 4080's bf16 answer to the same prompt. 'diverge' is the
+    measured first divergent generated token position, '-' when the two generations are identical.
+
+  id                 category     sense  correct        followed       vs reference        diverge
+  ------------------------------------------------------------------------------------------------
+  q01_france         facts            3  yes            yes            identical                 -
+  q02_hamlet         facts            3  yes            yes            identical                 -
+  q03_crc32          facts            3  partly         yes            different but fine       54
+  q04_fpga           facts            3  yes            yes            different but fine       41
+  q05_sky            facts            3  yes            yes            different but fine       41
+  q06_mul            arithmetic       3  yes            yes            identical                 -
+  q07_divadd         arithmetic       3  yes            yes            identical                 -
+  q08_prime91        arithmetic       3  yes            yes            identical                 -
+  q09_seq            arithmetic       3  yes            yes            identical                 -
+  q10_syllogism      reasoning        3  no             yes            equivalent               10
+  q11_wordproblem    reasoning        3  yes            yes            equivalent               11
+  q12_sortsize       reasoning        3  yes            yes            different but fine        0
+  q13_onesentence    instructions     3  yes            yes            equivalent                4
+  q14_threeitems     instructions     3  yes            yes            identical                 -
+  q15_yesno          instructions     3  yes            yes            identical                 -
+  q16_summary        writing          3  yes            yes            identical                 -
+  q17_haiku          writing          3  yes            partly         different but fine       11
+  q18_shiftreg_child writing          3  partly         partly         different but fine        9
+  q19_reverse        code             3  yes            yes            equivalent               42
+  q20_forloop        code             3  partly         yes            different but fine       24
+  q21_nl_hoofdstad   dutch            2  partly         yes            equivalent               11
+  q22_nl_uitleg      dutch            1  no             no             different but fine        0
+  q23_long           robustness       3  partly         partly         different but fine      102
+  q24_determinism    robustness       3  partly         yes            identical                 -
+  q25_emptyish       robustness       3  not applicable not applicable identical                 -
+  q26_unicode        robustness       3  partly         partly         different but fine        0
+  ------------------------------------------------------------------------------------------------
+
+  judges by category: q01-q09 facts and arithmetic; q10-q15 reasoning and instructions; q16-q20 writing and
+  code; q21-q26 Dutch and robustness.
+
+WHERE A JUDGE DEDUCTED, AND WHETHER THE SAME FAULT IS IN THE RTX 4080's ANSWER
+  q03_crc32: correct partly: the board's 'why a shift register' is circular ('efficiently processes the data in a
+    cyclic manner'), no polynomial division, no XOR taps, and 'particularly effective in detecting single-bit errors'
+    understates CRC-32. The RTX 4080 emits that whole sentence identically (the two diverge only at token 54);
+    bitnet.cpp's greedy path says 'computing a polynomial remainder for each block'.
+  q10_syllogism: correct no: 'Yes, it follows that some roses fade quickly' is the undistributed middle. The RTX 4080
+    makes the identical error and so does bitnet.cpp; the board's explanation is identical to bitnet.cpp's for 34
+    consecutive ids.
+  q17_haiku: followed partly: 6 / 6-7 / 5 syllables, not 5-7-5. The RTX 4080's is 6 / 6-7 / 6 and bitnet.cpp's also
+    misses.
+  q18_shiftreg_child: correct partly, followed partly: three sentences in one paragraph, not four lines, and 'take
+    them out in different orders' is wrong for a shift register. The RTX 4080 also gives three sentences and its own
+    'it can also change the order of the things it moves' is the same looseness; bitnet.cpp lands four sentences.
+  q20_forloop: correct partly: 'For loops can also take a condition as an argument' is wrong (that is a while loop or
+    a break). Both other ways hit the same 160-token cap mid-sentence; the board is the only one of the three to
+    answer in Python throughout, where the RTX 4080 pivots to C syntax.
+  q21_nl_hoofdstad: sense 2, correct partly: right answer ('De hoofdstad van Nederland is Amsterdam.') then Dutch
+    filler - the non-word 'populestat', 'meer dan 1.5 miljoen mensen' (the municipality is about 0.9M), 'bekend om
+    haar kantine, herinneren, herinneren', and an English intrusion 'een very bekend stad'. The RTX 4080 degrades in
+    the same idiom on the same prompt ('een very bekend stad', 'met grote kantine, kantine met kantine'); the two
+    share their first 11 generated ids.
+  q22_nl_uitleg: sense 1, correct no, followed no: it never defines a schuifregister, opens with a malformed question,
+    and repeats one line (see the repetition record above). See FAULT SIGNATURES below.
+  q23_long: correct partly: 'The carry-out bit is the result of the AND operation between the two input bits and the
+    carry-in bit' is wrong (carry-out is the majority of the three). The RTX 4080 makes the identical error. Only two
+    of the three asked paragraphs, because all three ways hit the 256-token cap.
+  q24_determinism: correct partly: 'generating serial numbers' is a malapropism for serial data. The RTX 4080 emitted
+    the same 20 ids.
+  q26_unicode: correct partly, followed partly: it calls the circled plus 'the plus or addition symbol' (it is
+    exclusive-or / direct sum), answers the micro-sign question about the Greek letter and the population mean instead
+    of micro = 10^-6, and calls mu the 13th letter of the Greek alphabet (it is the 12th). The RTX 4080 gives both
+    wrong readings too; bitnet.cpp gets 'microsecond' right. All four unusual code points survived: U+2295 as the
+    byte-fallback pair 54125, 243, 你好 as 57668, 53901 and the tone-marked pinyin as 77, 124562, 305, 119608, 78, all
+    decoded back correctly.
+
+  Checked here rather than taken from a judge: 17 x 23 = 391, 144 / 12 + 7 = 19, 91 = 7 x 13, 9:15 + 2 h 50 min =
+    12:05, "Hello, World!"[::-1] = "!dlroW ,olleH" (the board's q19 comment is character-exact; the RTX 4080's "#
+    Outputs:!dlroW,olleH" has lost both spaces), mu is the 12th letter of the Greek alphabet.
+
+COUNTS
+  prompts 26 in 8 categories (facts 5, arithmetic 4, reasoning 3, instructions 3, writing 3, code 2, Dutch 2,
+  robustness 4), each run three ways; q24 run twice a way for the determinism check.
+  sense              3: 24   2: 1   1: 1          mean 2.885
+  correct            yes: 16   partly: 7   no: 2   not applicable: 1
+  followed the       yes: 20   partly: 4   no: 1   not applicable: 1
+    instruction
+  vs the RTX 4080    identical: 11   equivalent: 5   different but fine: 10   worse: 0
+  judged gibberish   0 of 26
+  judged worse than the RTX 4080's answer to the same prompt   0 of 26
+
+  MEASURED, not judged (quality-answers.json's board_vs_hf, recomputed here from the raw generated ids):
+    prompt ids identical board vs RTX 4080   26 of 26
+    generation byte-identical (ids and text) 11 of 26: q01, q02, q06, q07, q08, q09, q14, q15, q16, q24, q25
+    first divergent generated token position on the other 15:
+      q12 0, q22 0, q26 0, q13 4, q18 9, q10 10, q11 11, q17 11, q21 11, q20 24, q04 41, q05 41, q19 42, q03 54, q23 102
+    the 11 the judges called 'identical' are exactly the 11 the harness measured as identical.
+    the board hit its max_new cap on 3 of 26 (q20, q22, q23); the RTX 4080 on 5 (q04, q20, q22, q23, q26);
+    bitnet.cpp on 5 (q04, q20, q21, q22, q23). Every other board answer stopped on its own EOS id 128009.
+
+  RATES OF THIS BATTERY (measured by the collecting harness, one run a prompt; q24 is excluded, it has two runs
+  a way. These are not the benchmark of kria-model-results.txt, which repeated 5 prompts 3 times):
+    board      1785 generated tokens in  233.271 s over the 25 timed prompts =  7.652 tok/s; a prompt 7.11 to 9.61 tok/s
+               prompt phase 12.49 to 15.10 tok/s
+    RTX 4080   1747 generated tokens in   83.172 s over the 25 timed prompts = 21.005 tok/s; a prompt 12.82 to 21.25 tok/s
+               (the RTX 4080 harness did not time the prompt phase separately)
+    bitnet.cpp 1872 generated tokens in  693.903 s over the 25 timed prompts =  2.698 tok/s; a prompt 2.37 to 4.15 tok/s
+               prompt phase 3.23 to 4.62 tok/s
+
+FAULT SIGNATURES LOOKED FOR (gibberish, a repetition loop, a wrong-language answer the RTX 4080 does not give, drift
+  that grows with the token count)
+  ONE BOARD ANSWER MEETS A FAULT SIGNATURE: q22_nl_uitleg. Asked to explain a shift register in two Dutch sentences,
+    the board never defines one, opens with the malformed question "Zijn er een schuifregister in twee zinnen?", then
+    repeats "Zie de zinnen in een boek of een document die een schuifregister is." three times (twice with its list
+    dash, which is what the harness counts: 2 duplicate sentences, 12 distinct of 14) with the header "**Verzoek naar
+    de zinnen:**" as both item 3 and item 4, and runs to the 160-token cap. It also diverges from the RTX 4080 at
+    generated position 0, one of three prompts where it does (q12, q22, q26). That is the whole of the evidence for a
+    fault, and it is named first because it is the only such answer.
+  What is measured against it being the board's: on this same prompt the RTX 4080 in bf16 is an equally worthless
+    non-answer ("Een schuifregister is een documentatiek dat bij de verkeersregister wordt gegeven", a made-up word
+    and a bureaucratic registry, also ignoring "twee zinnen", also to the cap), and bitnet.cpp on the same board
+    degenerates harder (a 25-word block, "de toegang naar de toegang, ...", repeated back to back twice). All three
+    ways fail this prompt. A first-token flip is expected here rather than symptomatic: over 994 teacher-forced
+    generated tokens on 8 prompts, 981 (98.7%) of the board's tokens are the RTX 4080's own top-1 at that exact
+    context and 994 of 994 are inside its top 5, with all 13 disagreements at HF logit gaps of 0 to 0.5 on logits of
+    magnitude 13 to 33, five of them exact bf16 ties (kria-model-results.txt).
+
+  gibberish: none in 26 board answers. Every board answer is well-formed text in the language of its prompt.
+  repetition: the board's only duplicated sentences in the battery that are not markdown are q22's. The other two
+    board answers with a duplicate record are q19 (the fences ```python and ``` twice each, exactly as in the RTX
+    4080's answer to the same prompt) and q20 (```python and the code line 'for i in range(5):' twice each, the second
+    time in the truncated example). On q23, the 256-token degeneration test, the board does not trip the harness's
+    repetition criterion and the RTX 4080 does: board 196 words, 12 sentences, 12 distinct, 0 duplicated,
+    fell_into_repetition false; the RTX 4080 fell_into_repetition true (it repeats '- Sum = (A XOR B) AND (A AND B)'
+    and '- Carry-out = (A AND B) XOR (A XOR B)', both false formulas); bitnet.cpp false, with one sentence twice.
+  wrong language: none. Both Dutch prompts got Dutch answers (q21 with an English intrusion 'very' that the RTX 4080
+    makes too, q26 answers about 你好 in English as asked in English).
+  drift growing with the token count: not seen. The divergence positions do not fall with generation length - the
+    longest identical generations are q08 (90 ids) and q16 (77 ids off a 124-id prompt), and the longest generation in
+    the battery, q23 at 256 tokens, held the RTX 4080's ids for 102 tokens and then stayed coherent for the remaining
+    154 while the RTX 4080's own continuation was the one that repeated. q24 run twice gave byte-identical ids both
+    times, so the board is deterministic.
+  crash or corruption: none. The empty-ish prompt q25 ('?', 16 prompt ids) generated 24 ids and stopped on EOS,
+    byte-identical to the RTX 4080's. The unusual code points of q26 round-tripped prompt -> tokenizer -> runtime ->
+    decoder. The code answers came back with intact ``` fences, 4-space indentation and an unmangled [::-1].
+
+CONCLUSION
+  No board answer is gibberish, none is in the wrong language, none drifts further from the reference as it gets
+    longer, and the only repetition in a board answer that is not a markdown fence is q22_nl_uitleg, where the RTX
+    4080 running the same weights fails the same prompt just as completely and bitnet.cpp on the same board
+    degenerates further. On that evidence the pipeline is sound.
+  Where the board differs from the RTX 4080 running the same model: 11 of 26 generations are byte-identical, ids and
+    text, including 90 ids on q08 and 77 ids on q16 off a 124-id prompt, and q24's determinism pair. The other 15
+    share a prefix and then take one different token: 12 of those forks are at generated position 4 or later (54, 42,
+    41, 41, 24, 11, 11, 11, 10, 9, 4 and 102) and each is a synonym- or punctuation-level substitution - 'particularly
+    effective' for 'particularly useful', 'circuits bright' for "circuits' heart", 'of the string' for 'of the input
+    string', 'number of iterations' for 'number of times' - after which the board's continuation stays fluent. Three
+    fork at position 0 (q12, q22, q26). That is the shape of an integer and shift-quantised datapath meeting bf16 at a
+    near-tied logit, and it matches the measured teacher-forced agreement (98.7% of board tokens are the RTX 4080's
+    top-1, 100% inside its top-5, every disagreement on an HF logit gap of 0 to 0.5) and the board's --stage-check,
+    which found every integer stage exact at 8 positions through all 30 layers. The judges called the board's answer
+    worse than the RTX 4080's on 0 of 26 prompts, equivalent or identical on 16, and different but fine on 10; on q11
+    (12:05, where bitnet.cpp says 12:20), q12 (mouse, horse, elephant, where the RTX 4080 puts the elephant second),
+    q19 (the reversed-string comment, character-exact where the RTX 4080 loses two spaces) and q23 (no repetition,
+    where the RTX 4080 repeats) the board's answer is the better one.
+  What belongs to the 2B model and not to the hardware: the wrong syllogism (q10, the same error on all three ways,
+    and 34 consecutive ids shared with bitnet.cpp), the circular CRC-32 explanation (q03, emitted identically by the
+    RTX 4080), the haiku that is not 5-7-5 (q17, the RTX 4080's is not either), the 'four lines' that is three
+    sentences (q18, likewise), the false claim that a for loop takes a condition (q20), the wrong carry-out formula
+    (q23, identical on the RTX 4080), the circled-plus read as addition and the micro sign read as the Greek letter
+    (q26, both wrong the same way on the RTX 4080), and the Dutch: q21 answers correctly and then produces
+    'populestat', 'een very bekend stad' and 'kantine' filler that the RTX 4080 produces in the same idiom, and q22
+    fails on all three ways. BitNet b1.58 2B4T is trained mostly on English; the Dutch quality measured here is a fact
+    about the model, demonstrated on the GPU, not about the fabric.
+
+FILES
+  board/research/ternary/bitnet/quality_prompts.json    the 26-prompt battery
+  board/research/ternary/bitnet/quality-answers.json    the three answers a prompt with ids, timings and the
+                                                        repetition records (the source of every quotation here)
+  board/research/ternary/bitnet/quality_board.py        runs the battery on the board
+  board/research/ternary/bitnet/quality_hf.py           runs it on the RTX 4080 in bf16
+  board/research/ternary/bitnet/quality_bitnetcpp.py    runs it on bitnet.cpp on the same board
+  board/research/ternary/bitnet/quality_merge.py        merges the three into quality-answers.json
+  board/research/ternary/bitnet/kria-model-results.txt  the speed, power and agreement numbers quoted above
+  board/research/ternary/bitnet/model-agreement.txt     the reference against HF, layer by layer
+  Every quotation, token count, timing and repetition record above was formatted straight out of
+  quality-answers.json by .../scratchpad/mkquality.py, which is not a repository file; a checker in the same
+  scratchpad (verify.py) confirmed that all 78 answers and all 26 prompts appear in this file with no change
+  but the folding.
+  Nothing in core/, no .rs file, simdr/, grit/ or the bitstream was touched for this file; no run was repeated
+  on the board to produce it.

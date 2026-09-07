@@ -1,0 +1,145 @@
+BitNet b1.58 2B4T on the KV260 processor (bitnet.cpp), 2026-09-05
+
+BOARD
+  Kria KV260, Zynq UltraScale+ (4x Cortex-A53, NEON only: cmake feature probes dotprod/i8mm/sve/sme all FAILED),
+  Ubuntu 22.04.4, kernel 5.15.0-1027-xilinx-zynqmp, 3911 MB RAM, no swap, 20 GB free on / before the work.
+  Working dir on the board: /home/ubuntu/bitnet (logs: install.log build.log build2.log build3.log, run outputs qa.* qb.* ca.* cb.* bench.* ppl*.log)
+
+SOURCES
+  git clone --recursive --depth 1 https://github.com/microsoft/BitNet.git /home/ubuntu/bitnet/BitNet
+    BitNet            0b341e582afbf9e1011f24744b554c96a3477eb5  (2026-07-27)
+    3rdparty/llama.cpp 390c307752ab78fd8189f359d6954c9ba1be74af  (isHuangXin/llama.cpp, 2026-07-15, build 9918)
+
+TOOLCHAIN (what worked)
+  apt on jammy arm64 offers cmake 3.22.1, clang-14, clang-15 only (no clang-18).
+  echo oracle-kria | sudo -S apt-get install -y cmake python3-venv python3-pip        -> cmake version 3.22.1
+  wget -O llvm.sh https://apt.llvm.org/llvm.sh && chmod +x llvm.sh && sudo ./llvm.sh 18  -> Ubuntu clang version 18.1.8, Target aarch64-unknown-linux-gnu
+  Compiler used: clang-18 / clang++-18 (README's clang>=18). gcc 11.4 and clang-15 were not needed and not tried.
+  No python venv / pip: utils/codegen_tl1.py imports only argparse/os/configparser and run_inference.py only execs llama-cli;
+  requirements.txt (torch etc.) is for model conversion only and was skipped.
+
+BUILD COMMANDS (the ones that produced the binaries used below)
+  cd /home/ubuntu/bitnet/BitNet
+  python3 utils/codegen_tl1.py --model bitnet_b1_58-3B --BM 160,320,320 --BK 64,128,64 --bm 32,64,32
+      (exactly what setup_env.py -q i2_s does for BitNet-b1.58-2B-4T on arm64; regenerates include/bitnet-lut-kernels.h)
+  cmake -B build -DBITNET_ARM_TL1=OFF -DCMAKE_C_COMPILER=clang-18 -DCMAKE_CXX_COMPILER=clang++-18 \
+        -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_EXAMPLES=ON -DLLAMA_BUILD_COMMON=ON -DLLAMA_BUILD_SERVER=ON
+      (setup_env.py itself passes -DBITNET_ARM_TL1=OFF on arm64 for i2_s; the i2_s GGUF is served by the I2_S
+       kernel in ggml-cpu (ggml-cpu-i2s.c + quants.c), not by the TL1 LUT kernel. -DBITNET_ARM_TL1=ON needs a
+       TL1-quantized GGUF, which the HF repo does not provide, so it was not used.)
+      cmake output: "ARM detected", "-mcpu=native+nodotprod+noi8mm+nosve+nosme"
+  cmake --build build --config Release --target llama-cli llama-bench llama-completion llama-perplexity -j4
+      (~25 min on the A53s; the full default build of every example/server was killed at 71% after 25 min)
+
+  Three source patches were required on this fork for ARM (files patch-quants.diff, patch-i2s.diff, patch-bitnet.diff
+  next to this file; applied with the unpatched originals kept as *.orig, then the same cmake --build):
+   1. ggml/src/ggml-cpu/quants.c  ggml_vec_dot_i2_i8_s_1x1: only an AVX2 kernel exists; the non-AVX2 scalar fallback
+      used the wrong bit layout (4 consecutive weights per byte; the GGUF packs 128-weight blocks of 32 bytes,
+      byte k = weights k, 32+k, 64+k, 96+k, per utils/convert-hf-to-gguf-bitnet.py and the AVX2 code) and mapped
+      codes to -1/0/+1 although the caller subtracts the activation sum again. Added a NEON kernel (vmull/vmlal_s8 +
+      vpadalq_s16, vdotq_s32 when DOTPROD is present) with the right layout and raw-code convention; scalar fallback
+      fixed the same way. Unit test ktest.c vs a scalar reference: 0 mismatches in 800 rows of n=2560.
+   2. ggml/src/ggml-cpu/ggml-cpu-i2s.c  ggml_gemm_i2_i8_s non-AVX2 fallback (ACT_PARALLEL) called vec_dot with
+      nrc = activation columns and a strided output, but the kernel treats nrc as weight rows with contiguous output;
+      every prompt batch (>= 4 tokens) was garbage. Replaced by one vec_dot call per activation column.
+   3. src/models/bitnet.cpp  the bitnet-b1.58 graph built the FFN with LLM_FFN_SILU; BitNet-b1.58-2B-4T uses squared
+      ReLU -> LLM_FFN_RELU_SQR for LLM_ARCH_BITNET_B158.
+  Two runtime flags were also required:
+   - the GGUF has no tokenizer.ggml.pre (loader: "missing pre-tokenizer type, using: 'default' ... GENERATION QUALITY
+     WILL BE DEGRADED") -> --override-kv tokenizer.ggml.pre=str:llama-bpe
+   - the GGUF's embedded chat template is "Human: ...\n\nBITNETAssistant: " + eos_token (generation ends at once with
+     --jinja; llama-completion aborts on it without --jinja) -> --jinja --chat-template-file bitnet_chat.jinja
+     (System: / User: / Assistant: turns separated by <|eot_id|>, as on the model card).
+  Evidence, perplexity on /usr/share/common-licenses/GPL-3 (-c 512, 2 chunks, 4 threads):
+     unpatched head:                              output all '?', 0.3 tok/s prompt and generation (run killed after 10:26)
+     patches 1+2, default pre-tokenizer:          PPL 70.98 +/- 9.86
+     patches 1+2, llama-bpe:                      PPL 43.71 +/- 5.23
+     patches 1+2+3, llama-bpe:                    PPL 5.41 +/- 0.55
+
+MODEL
+  wget -c https://huggingface.co/microsoft/bitnet-b1.58-2B-4T-gguf/resolve/main/ggml-model-i2_s.gguf   (78 s, 14.5 MB/s)
+  /home/ubuntu/bitnet/ggml-model-i2_s.gguf   1187801280 bytes
+  sha256  4221b252fdd5fd25e15847adfeb5ee88886506ba50b8a34548374492884c2162
+  llama-bench reports: bitnet-b1.58 2B Q1_0, 1.10 GiB, 2.41 B params; general.architecture = bitnet-b1.58
+
+RUN COMMAND (run_q.sh; greedy, --temp 0, 4 threads, 120 new tokens max, chat template above)
+  /usr/bin/time -v build/bin/llama-cli -m /home/ubuntu/bitnet/ggml-model-i2_s.gguf -t 4 -n 120 -c 2048 --temp 0 -ngl 0 \
+     --override-kv tokenizer.ggml.pre=str:llama-bpe --jinja --chat-template-file /home/ubuntu/bitnet/bitnet_chat.jinja \
+     -cnv -st -sys "You are a helpful assistant." -p "<question>"
+  llama-completion was run with the same flags to get token counts; it produced the identical text.
+
+QUESTION (a)
+  What is a CRC-32 checksum, and why does hardware compute it with a shift register? Answer in three sentences.
+ANSWER (a), verbatim, stopped at <|eot_id|> after 69 tokens
+  A CRC-32 checksum is a type of error-detecting code used to verify the integrity of data. It's computed by a hardware-based algorithm that uses a shift register to perform bitwise operations. This process involves dividing the data into blocks, computing a polynomial remainder for each block, and then combining these remainders to produce the final checksum.
+
+QUESTION (b)
+  Explain in two sentences what a ternary weight is.
+ANSWER (b), verbatim, stopped at <|eot_id|> after 53 tokens
+  A ternary weight is a type of weight used in some digital systems, where each weight is represented by three binary digits (bits). It's used to represent a range of values, typically between 0 and 7, by assigning each bit a specific value.
+
+NUMBERS
+  Temperatures: this kernel exposes no /sys/class/thermal/thermal_zone*; read /sys/class/hwmon/hwmon0 (ams):
+  temp1_input = PS (processor) and temp3_input = PL, millidegrees, sampled every second during each run (peak shown).
+  Power: /sys/class/hwmon/hwmon2 (ina260) power1_input, peak shown. Idle: PS 30.2 C, PL 27.5 C, 3.82 W.
+  Peak RSS = "Maximum resident set size" from /usr/bin/time -v.
+
+  run                     threads  prompt tok  prompt tok/s   gen tok  gen tok/s   peak RSS MB  wall s   PS C   PL C   W
+  (a) llama-cli              4        40         4.5            69       2.7         1360.0       42.5    32.3   28.3   5.32
+  (a) llama-completion       4        40         4.61           69       2.77          -          33.7     -      -      -
+                                     (8669.5 ms, 216.7 ms/tok)       (24886.5 ms, 360.7 ms/tok)   load 2706 ms
+  (b) llama-cli              4        27         4.5            53       2.8         1358.8       33.6    32.7   28.2   5.37
+  (b) llama-completion       4        27         4.57           53       2.72          -          25.5     -      -      -
+                                     (5901.8 ms, 218.6 ms/tok)       (19450.4 ms, 367.0 ms/tok)   load 2727 ms
+  llama-bench pp128          4       128         4.28 +/- 0.47   -        -           1220.0      290.0    32.8   28.5   5.30
+  llama-bench tg32           4        -          -               32       1.98 +/- 0.82   (same bench process)
+  unpatched head, (a)        4        40         0.3            ~120     0.3         1361.0      626      29.7   27.8   3.71   output: all '?'
+
+  free -m during (a): used 447 MB before, 443 MB after (model is mmap'd; buff/cache 2661 MB).
+  CPU use reported by time -v: 345% (a), 332% (b).
+
+NOT DONE / CAVEATS
+  - Built with the I2_S kernel (BITNET_ARM_TL1=OFF), which is what setup_env.py -q i2_s does on arm64; TL1 (LUT) kernel
+    not run because no TL1 GGUF exists for this model without converting from the bf16 safetensors.
+  - The fork's ARM I2_S path (July 2026 head) is broken as shipped; the numbers above are with the three patches.
+  - llama-bench tg32 has a large spread (+/- 0.82); the single-run generation rates were 2.7-2.8 tok/s.
+
+CHECK (2026-09-05, second agent, rerun on the board)
+  Binary: /home/ubuntu/bitnet/BitNet/build/bin/llama-cli (ELF aarch64, build b9918-390c30775), model
+  /home/ubuntu/bitnet/ggml-model-i2_s.gguf. No llama processes were running before or after; 17 GB free.
+  sha256sum on the board: 4221b252fdd5fd25e15847adfeb5ee88886506ba50b8a34548374492884c2162  ggml-model-i2_s.gguf
+  -> matches the reported sha256 and /home/ubuntu/bitnet/sha256.txt.
+
+  Command (same flags as RUN, -n 80, -t 4 then -t 2):
+  /usr/bin/time -v build/bin/llama-cli -m /home/ubuntu/bitnet/ggml-model-i2_s.gguf -t 4 -n 80 -c 2048 --temp 0 -ngl 0 \
+     --override-kv tokenizer.ggml.pre=str:llama-bpe --jinja --chat-template-file /home/ubuntu/bitnet/bitnet_chat.jinja \
+     -cnv -st -sys "You are a helpful assistant." -p "Name three things a shift register is used for."
+
+QUESTION (c)
+  Name three things a shift register is used for.
+ANSWER (c), verbatim, identical at 4 and 2 threads (temp 0), cut by the 80-token limit mid-item 3
+  1. Data storage: A shift register is used to store data temporarily. It can hold a sequence of bits or bytes of data, and can shift this data left or right to make room for new data.
+
+  2. Data transmission: Shift registers are used in digital communication systems to transmit data. They can shift data from one register to another, allowing for efficient transmission of data.
+
+  3. Counting
+
+  llama-cli status line, 4 threads:  [ Prompt: 4.6 t/s | Generation: 2.7 t/s ]   wall 42.83 s, CPU 346%, peak RSS 1391308 kB
+  llama-cli status line, 2 threads:  [ Prompt: 2.3 t/s | Generation: 1.5 t/s ]   wall 74.55 s, CPU 190%, peak RSS 1391168 kB
+
+  llama-completion with the same flags (identical text) for exact counts:
+  4 threads: prompt eval time =  5685.80 ms /  26 tokens (218.68 ms per token, 4.57 tokens per second)
+             eval time        = 28530.47 ms /  79 runs   (361.15 ms per token, 2.77 tokens per second)
+             total time       = 34423.58 ms / 105 tokens, load 2709.30 ms
+  2 threads: prompt eval time = 11138.42 ms /  26 tokens (428.40 ms per token, 2.33 tokens per second)
+             eval time        = 53669.63 ms /  79 runs   (679.36 ms per token, 1.47 tokens per second)
+             total time       = 65000.28 ms / 105 tokens, load 3231.49 ms
+
+  run                 threads  prompt tok  prompt tok/s  gen tok  gen tok/s  peak RSS MB  wall s
+  (c) llama-cli          4        26         4.6           80       2.7        1358.7     42.8
+  (c) llama-completion   4        26         4.57          79       2.77         -        34.4
+  (c) llama-cli          2        26         2.3           80       1.5        1358.6     74.6
+  (c) llama-completion   2        26         2.33          79       1.47         -        65.0
+
+  Scaling 2 -> 4 threads: generation 1.47 -> 2.77 tok/s (1.88x), prompt 2.33 -> 4.57 tok/s (1.96x).
+  Idle after the runs: PS 29.8 C, PL 27.0 C, 3.70 W. The previous agent's 2.7-2.8 tok/s at 4 threads is reproduced.

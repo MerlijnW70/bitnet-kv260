@@ -1,0 +1,245 @@
+  locked 331 MB of head weights, scales and norms into RAM in 0.20 s
+BitNet b1.58 2B4T on the KV260: 30 layers, hidden 2560, intermediate 6912, 20 q heads over 5 kv heads of 128, vocab 128256
+  /dev/udmabuf0 phys 0x0038300000 size 545259520: model3.bin 417546240 bytes read in 0.86 s (483 MB/s)
+  /dev/udmabuf1 phys 0x0058b00000 size 8388608: activations, sums and glue beats need 987136 bytes
+  /dev/udmabuf2 phys 0x0059300000 size 83886080: head3_t.bin 65667072 bytes read in 0.14 s (483 MB/s), 32064 neurons of 32 beats an engine; the head sums take 513024 bytes of /dev/udmabuf1 at 0x0f1000; shortlist K = 256
+  engines at 0x00a0000000 + i*0x10000, DMAs at 0x00a0040000; glue GPIO 0x00a0080000 params 0x00a0090000 DMA 0x00a00a0000
+  KV cache float32, context 2048: 315 MB; 4 threads
+  a layer streams 13918208 weight bytes (base3, 80 weights a beat): qkv 3840 neurons of 32 beats, o 2560, gate+up 13824, down 2560 of 87 (a quarter an engine)
+  a token streams 417546240 weight bytes over 30 layers; the prompt runs 4 positions a group
+  setup 1.53 s
+stage check against refdump/stages.bin: 8 positions, 30 of 30 layers
+position 0 (token 1502):
+  l0_attn_in       2560 float   outside 1e-06+1e-05|ref|      0   max|diff| 0           of max|ref| 0.06635     cosine 1.000000000  ok
+  l0_xq            2560 int8    differ      0 exact
+  l0_qi            2560 int32   differ      0 exact
+  l0_ki             640 int32   differ      0 exact
+  l0_vi             640 int32   differ      0 exact
+  l0_q             2560 float   outside 1e-06+1e-05|ref|      0   max|diff| 0           of max|ref| 6.437       cosine 1.000000000  ok
+  l0_k              640 float   outside 1e-06+1e-05|ref|      0   max|diff| 0           of max|ref| 8.425       cosine 1.000000000  ok
+  l0_v              640 float   outside 1e-06+1e-05|ref|      0   max|diff| 0           of max|ref| 14.86       cosine 1.000000000  ok
+  l0_attn_out      2560 float   outside 1e-05+1e-04|ref|      0   max|diff| 0           of max|ref| 14.86       cosine 1.000000000  ok
+  l0_attn_sub      2560 float   outside 1e-05+1e-04|ref|      0   max|diff| 0           of max|ref| 0.05484     cosine 1.000000000  ok
+  l0_aq            2560 int8    differ      0 exact
+  l0_oi            2560 int32   differ      0 exact
+  l0_o             2560 float   outside 1e-05+1e-04|ref|      0   max|diff| 0           of max|ref| 2.529       cosine 1.000000000  ok
+  l0_mlp_in        2560 float   outside 1e-05+1e-04|ref|      0   max|diff| 0           of max|ref| 5.385       cosine 1.000000000  ok
+  l0_x2q           2560 int8    differ      0 exact
+  l0_g             6912 int32   differ      0 exact
+  l0_u             6912 int32   differ      0 exact
+  l0_shifts           8 int32   differ      0 exact
+  l0_h             6912 int16   differ      0 exact
+  l0_q8            6912 int8    differ      0 exact
+  l0_d             2560 int32   differ      0 exact
+  l0_ffn           2560 float   outside 1e-05+1e-04|ref|      0   max|diff| 0           of max|ref| 467.2       cosine 1.000000000  ok
+  hidden cosine against the reference, layer by layer: 0:1.000000 5:1.000000 10:1.000000 15:1.000000 20:1.000000 25:1.000000 30:1.000000
+  hidden[30] max|diff| 0.001953 of max|ref| 7.128e+04; worst cosine 1.000000000 at layer 21
+  final_norm       2560 float   outside 1e-04+1e-04|ref|      0   max|diff| 3.725e-08   of max|ref| 0.3259      cosine 1.000000000  ok
+  logits         128256 float   max|diff| 0.01573   cosine 0.999999987
+  top-1          argmax 25, reference 25  same
+  two-stage      fabric argmax 25, exact head 25  same
+position 1 (token 25):
+  l0_attn_in       2560 float   outside 1e-06+1e-05|ref|      0   max|diff| 0           of max|ref| 0.07637     cosine 1.000000000  ok
+  l0_xq            2560 int8    differ      0 exact
+  l0_qi            2560 int32   differ      0 exact
+  l0_ki             640 int32   differ      0 exact
+  l0_vi             640 int32   differ      0 exact
+  l0_q             2560 float   outside 1e-06+1e-05|ref|      0   max|diff| 0           of max|ref| 7.138       cosine 1.000000000  ok
+  l0_k              640 float   outside 1e-06+1e-05|ref|      0   max|diff| 0           of max|ref| 8.942       cosine 1.000000000  ok
+  l0_v              640 float   outside 1e-06+1e-05|ref|      0   max|diff| 0           of max|ref| 24.21       cosine 1.000000000  ok
+  l0_attn_out      2560 float   outside 1e-05+1e-04|ref|      0   max|diff| 8.106e-06   of max|ref| 24.21       cosine 1.000000000  ok
+  l0_attn_sub      2560 float   outside 1e-05+1e-04|ref|      0   max|diff| 1.537e-08   of max|ref| 0.05584     cosine 1.000000000  ok
+  l0_aq            2560 int8    differ      0 exact
+  l0_oi            2560 int32   differ      0 exact
+  l0_o             2560 float   outside 1e-05+1e-04|ref|      0   max|diff| 0           of max|ref| 2.837       cosine 1.000000000  ok
+  l0_mlp_in        2560 float   outside 1e-05+1e-04|ref|      0   max|diff| 4.768e-07   of max|ref| 4.629       cosine 1.000000000  ok
+  l0_x2q           2560 int8    differ      0 exact
+  l0_g             6912 int32   differ      0 exact
+  l0_u             6912 int32   differ      0 exact
+  l0_shifts           8 int32   differ      0 exact
+  l0_h             6912 int16   differ      0 exact
+  l0_q8            6912 int8    differ      0 exact
+  l0_d             2560 int32   differ      0 exact
+  l0_ffn           2560 float   outside 1e-05+1e-04|ref|      0   max|diff| 0           of max|ref| 147.9       cosine 1.000000000  ok
+  hidden cosine against the reference, layer by layer: 0:1.000000 5:1.000000 10:0.999995 15:0.999978 20:0.999959 25:0.999895 30:0.999813
+  hidden[30] max|diff| 769.8 of max|ref| 1.461e+05; worst cosine 0.999812683 at layer 30
+  final_norm       2560 float   outside 1e-04+1e-04|ref|   2436   max|diff| 0.01196     of max|ref| 0.5047      cosine 0.998920773  ok
+  logits         128256 float   max|diff| 0.502   cosine 0.999743598
+  top-1          argmax 720, reference 720  same
+  two-stage      fabric argmax 720, exact head 720  same
+position 2 (token 3639):
+  l0_attn_in       2560 float   outside 1e-06+1e-05|ref|      0   max|diff| 0           of max|ref| 0.06366     cosine 1.000000000  ok
+  l0_xq            2560 int8    differ      0 exact
+  l0_qi            2560 int32   differ      0 exact
+  l0_ki             640 int32   differ      0 exact
+  l0_vi             640 int32   differ      0 exact
+  l0_q             2560 float   outside 1e-06+1e-05|ref|      0   max|diff| 0           of max|ref| 8.197       cosine 1.000000000  ok
+  l0_k              640 float   outside 1e-06+1e-05|ref|      0   max|diff| 0           of max|ref| 8.985       cosine 1.000000000  ok
+  l0_v              640 float   outside 1e-06+1e-05|ref|      0   max|diff| 0           of max|ref| 23.93       cosine 1.000000000  ok
+  l0_attn_out      2560 float   outside 1e-05+1e-04|ref|      0   max|diff| 6.08e-06    of max|ref| 24.21       cosine 1.000000000  ok
+  l0_attn_sub      2560 float   outside 1e-05+1e-04|ref|      0   max|diff| 4.75e-08    of max|ref| 0.07032     cosine 1.000000000  ok
+  l0_aq            2560 int8    differ      0 exact
+  l0_oi            2560 int32   differ      0 exact
+  l0_o             2560 float   outside 1e-05+1e-04|ref|      0   max|diff| 9.537e-07   of max|ref| 2.9         cosine 1.000000000  ok
+  l0_mlp_in        2560 float   outside 1e-05+1e-04|ref|      0   max|diff| 1.669e-06   of max|ref| 4.654       cosine 1.000000000  ok
+  l0_x2q           2560 int8    differ      0 exact
+  l0_g             6912 int32   differ      0 exact
+  l0_u             6912 int32   differ      0 exact
+  l0_shifts           8 int32   differ      0 exact
+  l0_h             6912 int16   differ      0 exact
+  l0_q8            6912 int8    differ      0 exact
+  l0_d             2560 int32   differ      0 exact
+  l0_ffn           2560 float   outside 1e-05+1e-04|ref|      0   max|diff| 0           of max|ref| 143.7       cosine 1.000000000  ok
+  hidden cosine against the reference, layer by layer: 0:1.000000 5:1.000000 10:0.999906 15:0.999830 20:0.999893 25:0.999911 30:0.999940
+  hidden[30] max|diff| 612 of max|ref| 1.352e+05; worst cosine 0.999830263 at layer 15
+  final_norm       2560 float   outside 1e-04+1e-04|ref|   2345   max|diff| 0.01406     of max|ref| 1.23        cosine 0.999858675  ok
+  logits         128256 float   max|diff| 0.6529   cosine 0.999922788
+  top-1          argmax 374, reference 374  same
+  two-stage      fabric argmax 374, exact head 374  same
+position 3 (token 374):
+  l0_attn_in       2560 float   outside 1e-06+1e-05|ref|      0   max|diff| 0           of max|ref| 0.07681     cosine 1.000000000  ok
+  l0_xq            2560 int8    differ      0 exact
+  l0_qi            2560 int32   differ      0 exact
+  l0_ki             640 int32   differ      0 exact
+  l0_vi             640 int32   differ      0 exact
+  l0_q             2560 float   outside 1e-06+1e-05|ref|      0   max|diff| 0           of max|ref| 7.116       cosine 1.000000000  ok
+  l0_k              640 float   outside 1e-06+1e-05|ref|      0   max|diff| 0           of max|ref| 14.02       cosine 1.000000000  ok
+  l0_v              640 float   outside 1e-06+1e-05|ref|      0   max|diff| 0           of max|ref| 15.77       cosine 1.000000000  ok
+  l0_attn_out      2560 float   outside 1e-05+1e-04|ref|      0   max|diff| 3.815e-06   of max|ref| 24.17       cosine 1.000000000  ok
+  l0_attn_sub      2560 float   outside 1e-05+1e-04|ref|      0   max|diff| 2.235e-08   of max|ref| 0.07338     cosine 1.000000000  ok
+  l0_aq            2560 int8    differ      0 exact
+  l0_oi            2560 int32   differ      0 exact
+  l0_o             2560 float   outside 1e-05+1e-04|ref|      0   max|diff| 4.768e-07   of max|ref| 2.879       cosine 1.000000000  ok
+  l0_mlp_in        2560 float   outside 1e-05+1e-04|ref|      0   max|diff| 8.941e-07   of max|ref| 4.48        cosine 1.000000000  ok
+  l0_x2q           2560 int8    differ      0 exact
+  l0_g             6912 int32   differ      0 exact
+  l0_u             6912 int32   differ      0 exact
+  l0_shifts           8 int32   differ      0 exact
+  l0_h             6912 int16   differ      0 exact
+  l0_q8            6912 int8    differ      0 exact
+  l0_d             2560 int32   differ      0 exact
+  l0_ffn           2560 float   outside 1e-05+1e-04|ref|      0   max|diff| 0           of max|ref| 80.48       cosine 1.000000000  ok
+  hidden cosine against the reference, layer by layer: 0:1.000000 5:1.000000 10:0.999949 15:0.999907 20:0.999911 25:0.999931 30:0.999961
+  hidden[30] max|diff| 337.6 of max|ref| 1.456e+05; worst cosine 0.999880481 at layer 16
+  final_norm       2560 float   outside 1e-04+1e-04|ref|   2318   max|diff| 0.00485     of max|ref| 0.895       cosine 0.999869980  ok
+  logits         128256 float   max|diff| 0.4024   cosine 0.999420357
+  top-1          argmax 279, reference 279  same
+  two-stage      fabric argmax 279, exact head 279  same
+position 4 (token 279):
+  l0_attn_in       2560 float   outside 1e-06+1e-05|ref|      0   max|diff| 0           of max|ref| 0.08261     cosine 1.000000000  ok
+  l0_xq            2560 int8    differ      0 exact
+  l0_qi            2560 int32   differ      0 exact
+  l0_ki             640 int32   differ      0 exact
+  l0_vi             640 int32   differ      0 exact
+  l0_q             2560 float   outside 1e-06+1e-05|ref|      0   max|diff| 0           of max|ref| 6.22        cosine 1.000000000  ok
+  l0_k              640 float   outside 1e-06+1e-05|ref|      0   max|diff| 0           of max|ref| 8.553       cosine 1.000000000  ok
+  l0_v              640 float   outside 1e-06+1e-05|ref|      0   max|diff| 0           of max|ref| 29.95       cosine 1.000000000  ok
+  l0_attn_out      2560 float   outside 1e-05+1e-04|ref|      0   max|diff| 3.815e-06   of max|ref| 29.95       cosine 1.000000000  ok
+  l0_attn_sub      2560 float   outside 1e-05+1e-04|ref|      0   max|diff| 2.235e-08   of max|ref| 0.05244     cosine 1.000000000  ok
+  l0_aq            2560 int8    differ      0 exact
+  l0_oi            2560 int32   differ      0 exact
+  l0_o             2560 float   outside 1e-05+1e-04|ref|      0   max|diff| 1.192e-06   of max|ref| 3.051       cosine 1.000000000  ok
+  l0_mlp_in        2560 float   outside 1e-05+1e-04|ref|      0   max|diff| 2.623e-06   of max|ref| 4.232       cosine 1.000000000  ok
+  l0_x2q           2560 int8    differ      0 exact
+  l0_g             6912 int32   differ      0 exact
+  l0_u             6912 int32   differ      0 exact
+  l0_shifts           8 int32   differ      0 exact
+  l0_h             6912 int16   differ      0 exact
+  l0_q8            6912 int8    differ      0 exact
+  l0_d             2560 int32   differ      0 exact
+  l0_ffn           2560 float   outside 1e-05+1e-04|ref|      0   max|diff| 0           of max|ref| 76.07       cosine 1.000000000  ok
+  hidden cosine against the reference, layer by layer: 0:1.000000 5:1.000000 10:0.999941 15:0.999916 20:0.999941 25:0.999942 30:0.999963
+  hidden[30] max|diff| 346.4 of max|ref| 1.318e+05; worst cosine 0.999915826 at layer 15
+  final_norm       2560 float   outside 1e-04+1e-04|ref|   2318   max|diff| 0.003265    of max|ref| 1.184       cosine 0.999917547  ok
+  logits         128256 float   max|diff| 0.5027   cosine 0.999928218
+  top-1          argmax 6811, reference 6811  same
+  two-stage      fabric argmax 6811, exact head 6811  same
+position 5 (token 6864):
+  l0_attn_in       2560 float   outside 1e-06+1e-05|ref|      0   max|diff| 0           of max|ref| 0.07124     cosine 1.000000000  ok
+  l0_xq            2560 int8    differ      0 exact
+  l0_qi            2560 int32   differ      0 exact
+  l0_ki             640 int32   differ      0 exact
+  l0_vi             640 int32   differ      0 exact
+  l0_q             2560 float   outside 1e-06+1e-05|ref|      0   max|diff| 0           of max|ref| 7.128       cosine 1.000000000  ok
+  l0_k              640 float   outside 1e-06+1e-05|ref|      0   max|diff| 0           of max|ref| 8.502       cosine 1.000000000  ok
+  l0_v              640 float   outside 1e-06+1e-05|ref|      0   max|diff| 0           of max|ref| 24.6        cosine 1.000000000  ok
+  l0_attn_out      2560 float   outside 1e-05+1e-04|ref|      0   max|diff| 3.397e-06   of max|ref| 29.93       cosine 1.000000000  ok
+  l0_attn_sub      2560 float   outside 1e-05+1e-04|ref|      0   max|diff| 1.42e-08    of max|ref| 0.04689     cosine 1.000000000  ok
+  l0_aq            2560 int8    differ      0 exact
+  l0_oi            2560 int32   differ      0 exact
+  l0_o             2560 float   outside 1e-05+1e-04|ref|      0   max|diff| 2.384e-07   of max|ref| 2.957       cosine 1.000000000  ok
+  l0_mlp_in        2560 float   outside 1e-05+1e-04|ref|      0   max|diff| 7.153e-07   of max|ref| 4.463       cosine 1.000000000  ok
+  l0_x2q           2560 int8    differ      0 exact
+  l0_g             6912 int32   differ      0 exact
+  l0_u             6912 int32   differ      0 exact
+  l0_shifts           8 int32   differ      0 exact
+  l0_h             6912 int16   differ      0 exact
+  l0_q8            6912 int8    differ      0 exact
+  l0_d             2560 int32   differ      0 exact
+  l0_ffn           2560 float   outside 1e-05+1e-04|ref|      0   max|diff| 0           of max|ref| 418.5       cosine 1.000000000  ok
+  hidden cosine against the reference, layer by layer: 0:1.000000 5:1.000000 10:0.999887 15:0.999780 20:0.999782 25:0.999729 30:0.999799
+  hidden[30] max|diff| 558.3 of max|ref| 9.488e+04; worst cosine 0.999700982 at layer 16
+  final_norm       2560 float   outside 1e-04+1e-04|ref|   2452   max|diff| 0.009646    of max|ref| 0.6543      cosine 0.999309790  ok
+  logits         128256 float   max|diff| 0.65   cosine 0.997858228
+  top-1          argmax 315, reference 315  same
+  two-stage      fabric argmax 315, exact head 315  same
+position 6 (token 315):
+  l0_attn_in       2560 float   outside 1e-06+1e-05|ref|      0   max|diff| 7.451e-09   of max|ref| 0.07768     cosine 1.000000000  ok
+  l0_xq            2560 int8    differ      0 exact
+  l0_qi            2560 int32   differ      0 exact
+  l0_ki             640 int32   differ      0 exact
+  l0_vi             640 int32   differ      0 exact
+  l0_q             2560 float   outside 1e-06+1e-05|ref|      0   max|diff| 0           of max|ref| 7.656       cosine 1.000000000  ok
+  l0_k              640 float   outside 1e-06+1e-05|ref|      0   max|diff| 0           of max|ref| 9.246       cosine 1.000000000  ok
+  l0_v              640 float   outside 1e-06+1e-05|ref|      0   max|diff| 0           of max|ref| 25.56       cosine 1.000000000  ok
+  l0_attn_out      2560 float   outside 1e-05+1e-04|ref|      0   max|diff| 5.007e-06   of max|ref| 25.56       cosine 1.000000000  ok
+  l0_attn_sub      2560 float   outside 1e-05+1e-04|ref|      0   max|diff| 4.098e-08   of max|ref| 0.0984      cosine 1.000000000  ok
+  l0_aq            2560 int8    differ      0 exact
+  l0_oi            2560 int32   differ      0 exact
+  l0_o             2560 float   outside 1e-05+1e-04|ref|      0   max|diff| 7.153e-07   of max|ref| 3.937       cosine 1.000000000  ok
+  l0_mlp_in        2560 float   outside 1e-05+1e-04|ref|      0   max|diff| 1.073e-06   of max|ref| 4.718       cosine 1.000000000  ok
+  l0_x2q           2560 int8    differ      0 exact
+  l0_g             6912 int32   differ      0 exact
+  l0_u             6912 int32   differ      0 exact
+  l0_shifts           8 int32   differ      0 exact
+  l0_h             6912 int16   differ      0 exact
+  l0_q8            6912 int8    differ      0 exact
+  l0_d             2560 int32   differ      0 exact
+  l0_ffn           2560 float   outside 1e-05+1e-04|ref|      0   max|diff| 0           of max|ref| 33.96       cosine 1.000000000  ok
+  hidden cosine against the reference, layer by layer: 0:1.000000 5:1.000000 10:0.999864 15:0.999741 20:0.999775 25:0.999809 30:0.999907
+  hidden[30] max|diff| 410.2 of max|ref| 1.242e+05; worst cosine 0.999739369 at layer 17
+  final_norm       2560 float   outside 1e-04+1e-04|ref|   2378   max|diff| 0.009979    of max|ref| 0.802       cosine 0.999616303  ok
+  logits         128256 float   max|diff| 0.691   cosine 0.999750492
+  top-1          argmax 279, reference 279  same
+  two-stage      fabric argmax 279, exact head 279  same
+position 7 (token 9822):
+  l0_attn_in       2560 float   outside 1e-06+1e-05|ref|      0   max|diff| 0           of max|ref| 0.06754     cosine 1.000000000  ok
+  l0_xq            2560 int8    differ      0 exact
+  l0_qi            2560 int32   differ      0 exact
+  l0_ki             640 int32   differ      0 exact
+  l0_vi             640 int32   differ      0 exact
+  l0_q             2560 float   outside 1e-06+1e-05|ref|      0   max|diff| 0           of max|ref| 7.485       cosine 1.000000000  ok
+  l0_k              640 float   outside 1e-06+1e-05|ref|      0   max|diff| 0           of max|ref| 9.545       cosine 1.000000000  ok
+  l0_v              640 float   outside 1e-06+1e-05|ref|      0   max|diff| 0           of max|ref| 24.46       cosine 1.000000000  ok
+  l0_attn_out      2560 float   outside 1e-05+1e-04|ref|      0   max|diff| 7.629e-06   of max|ref| 29.08       cosine 1.000000000  ok
+  l0_attn_sub      2560 float   outside 1e-05+1e-04|ref|      0   max|diff| 2.421e-08   of max|ref| 0.03277     cosine 1.000000000  ok
+  l0_aq            2560 int8    differ      0 exact
+  l0_oi            2560 int32   differ      0 exact
+  l0_o             2560 float   outside 1e-05+1e-04|ref|      0   max|diff| 2.384e-07   of max|ref| 2.215       cosine 1.000000000  ok
+  l0_mlp_in        2560 float   outside 1e-05+1e-04|ref|      0   max|diff| 7.153e-07   of max|ref| 4.349       cosine 1.000000000  ok
+  l0_x2q           2560 int8    differ      0 exact
+  l0_g             6912 int32   differ      0 exact
+  l0_u             6912 int32   differ      0 exact
+  l0_shifts           8 int32   differ      0 exact
+  l0_h             6912 int16   differ      0 exact
+  l0_q8            6912 int8    differ      0 exact
+  l0_d             2560 int32   differ      0 exact
+  l0_ffn           2560 float   outside 1e-05+1e-04|ref|      0   max|diff| 0           of max|ref| 519.7       cosine 1.000000000  ok
+  hidden cosine against the reference, layer by layer: 0:1.000000 5:1.000000 10:0.999900 15:0.999828 20:0.999827 25:0.999859 30:0.999897
+  hidden[30] max|diff| 309 of max|ref| 8.441e+04; worst cosine 0.999812304 at layer 13
+  final_norm       2560 float   outside 1e-04+1e-04|ref|   2420   max|diff| 0.00766     of max|ref| 0.5271      cosine 0.999440460  ok
+  logits         128256 float   max|diff| 0.5261   cosine 0.999891269
+  top-1          argmax 5380, reference 5380  same
+  two-stage      fabric argmax 5380, exact head 5380  same
+stage check: every integer stage exact, every float stage above its cosine floor, every top-1 the reference's
+rc 0

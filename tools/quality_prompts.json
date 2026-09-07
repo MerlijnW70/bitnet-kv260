@@ -1,0 +1,189 @@
+{
+ "note": "The quality battery for BitNet b1.58 2B4T on the KV260. Every prompt is run three ways with the same text, the same chat template (board/research/ternary/bitnet/bitnet_chat.jinja: 'System: ...<|eot_id|>User: ...<|eot_id|>Assistant: '), the same system message and the same max_new: on the BOARD (board/bitnet_kria.c through board/bitnet_chat.py, greedy), on the HF checkpoint on an RTX 4080 in bf16 (greedy), and on bitnet.cpp's own kernels on the same board (llama-cli --temp 0). 'must_contain' says what a good answer would have to contain; it is metadata for a later reader, it is NOT scored here and no answer in quality-answers.json is judged against it.",
+ "system": "You are a helpful assistant.",
+ "prompts": [
+  {
+   "id": "q01_france",
+   "category": "facts",
+   "max_new": 64,
+   "prompt": "What is the capital of France?",
+   "must_contain": "Paris"
+  },
+  {
+   "id": "q02_hamlet",
+   "category": "facts",
+   "max_new": 64,
+   "prompt": "Who wrote the play Hamlet?",
+   "must_contain": "William Shakespeare"
+  },
+  {
+   "id": "q03_crc32",
+   "category": "facts",
+   "max_new": 160,
+   "prompt": "What is a CRC-32 checksum, and why does hardware compute it with a shift register? Answer in three sentences.",
+   "must_contain": "an error-detecting code / a checksum over data; polynomial division or a remainder; a shift register with XOR taps does the division one bit a clock"
+  },
+  {
+   "id": "q04_fpga",
+   "category": "facts",
+   "max_new": 160,
+   "prompt": "What is an FPGA?",
+   "must_contain": "a field-programmable gate array; a chip of programmable logic (lookup tables, flip-flops, routing) configured after manufacture"
+  },
+  {
+   "id": "q05_sky",
+   "category": "facts",
+   "max_new": 128,
+   "prompt": "Explain in two sentences why the sky is blue.",
+   "must_contain": "Rayleigh scattering; shorter (blue) wavelengths scatter more than longer (red) ones"
+  },
+  {
+   "id": "q06_mul",
+   "category": "arithmetic",
+   "max_new": 128,
+   "prompt": "What is 17 times 23? Give the number.",
+   "must_contain": "391"
+  },
+  {
+   "id": "q07_divadd",
+   "category": "arithmetic",
+   "max_new": 128,
+   "prompt": "What is 144 divided by 12, plus 7?",
+   "must_contain": "19 (144/12 = 12, 12 + 7 = 19)"
+  },
+  {
+   "id": "q08_prime91",
+   "category": "arithmetic",
+   "max_new": 160,
+   "prompt": "Is 91 a prime number? Explain why or why not.",
+   "must_contain": "no, it is not prime; 91 = 7 x 13"
+  },
+  {
+   "id": "q09_seq",
+   "category": "arithmetic",
+   "max_new": 96,
+   "prompt": "What is the next number in this sequence: 2, 4, 8, 16?",
+   "must_contain": "32"
+  },
+  {
+   "id": "q10_syllogism",
+   "category": "reasoning",
+   "max_new": 192,
+   "prompt": "All roses are flowers. Some flowers fade quickly. Does it follow that some roses fade quickly? Answer yes or no and explain.",
+   "must_contain": "no, it does not follow; the flowers that fade quickly need not be the roses"
+  },
+  {
+   "id": "q11_wordproblem",
+   "category": "reasoning",
+   "max_new": 192,
+   "prompt": "A train leaves at 9:15 and the journey takes 2 hours and 50 minutes. What time does it arrive?",
+   "must_contain": "12:05"
+  },
+  {
+   "id": "q12_sortsize",
+   "category": "reasoning",
+   "max_new": 128,
+   "prompt": "Sort these three things from smallest to largest: an elephant, a mouse, a horse.",
+   "must_contain": "mouse, horse, elephant, in that order"
+  },
+  {
+   "id": "q13_onesentence",
+   "category": "instructions",
+   "max_new": 96,
+   "prompt": "Answer in exactly one sentence: what does a transistor do?",
+   "must_contain": "exactly one sentence, about switching or amplifying current"
+  },
+  {
+   "id": "q14_threeitems",
+   "category": "instructions",
+   "max_new": 128,
+   "prompt": "Answer with a list of exactly three items: three uses of a shift register.",
+   "must_contain": "exactly three listed items"
+  },
+  {
+   "id": "q15_yesno",
+   "category": "instructions",
+   "max_new": 32,
+   "prompt": "Answer only with the word yes or no. Is water wet?",
+   "must_contain": "the single word yes or no, and nothing else"
+  },
+  {
+   "id": "q16_summary",
+   "category": "writing",
+   "max_new": 160,
+   "prompt": "Summarise this paragraph in exactly two sentences.\n\nA field-programmable gate array is a chip full of small lookup tables and flip-flops joined by wires whose connections are set after the chip is made. A designer describes the circuit they want, a tool works out which lookup table should hold which truth table and which wires should be joined, and the result is written into the chip as a bitstream. Because the bitstream can be replaced, the same silicon can be a video scaler in the morning and a network filter in the afternoon.",
+   "must_contain": "exactly two sentences covering programmable logic and reconfigurability"
+  },
+  {
+   "id": "q17_haiku",
+   "category": "writing",
+   "max_new": 96,
+   "prompt": "Write a haiku about a circuit board.",
+   "must_contain": "three lines, about a circuit board"
+  },
+  {
+   "id": "q18_shiftreg_child",
+   "category": "writing",
+   "max_new": 160,
+   "prompt": "Explain what a shift register is to a ten-year-old child, in four lines.",
+   "must_contain": "four lines; the idea of bits stepping along one place at each tick"
+  },
+  {
+   "id": "q19_reverse",
+   "category": "code",
+   "max_new": 192,
+   "prompt": "Write a Python function that reverses a string.",
+   "must_contain": "a def, and a reversal such as s[::-1] or reversed(s)"
+  },
+  {
+   "id": "q20_forloop",
+   "category": "code",
+   "max_new": 160,
+   "prompt": "What does a for loop do in programming?",
+   "must_contain": "repeats a block of code, iterating over a sequence or a range"
+  },
+  {
+   "id": "q21_nl_hoofdstad",
+   "category": "dutch",
+   "max_new": 96,
+   "prompt": "Wat is de hoofdstad van Nederland?",
+   "must_contain": "Amsterdam (Dutch is a weak language for BitNet b1.58 2B4T, which is trained mostly on English: a poor Dutch answer is a fact about the model, not about the board)"
+  },
+  {
+   "id": "q22_nl_uitleg",
+   "category": "dutch",
+   "max_new": 160,
+   "prompt": "Leg in twee zinnen uit wat een schuifregister is.",
+   "must_contain": "two Dutch sentences about a shift register (same caveat: the model is mostly English)"
+  },
+  {
+   "id": "q23_long",
+   "category": "robustness",
+   "max_new": 256,
+   "prompt": "Write a detailed explanation, of at least three paragraphs, of how a computer adds two numbers together, starting from a single full adder and building up to a 32-bit adder.",
+   "must_contain": "at least 200 generated tokens without falling into repetition"
+  },
+  {
+   "id": "q24_determinism",
+   "category": "robustness",
+   "repeats": 2,
+   "max_new": 128,
+   "prompt": "Name three things a shift register is used for.",
+   "must_contain": "with greedy decoding the two runs must produce byte-identical output"
+  },
+  {
+   "id": "q25_emptyish",
+   "category": "robustness",
+   "max_new": 96,
+   "prompt": "?",
+   "must_contain": "anything at all; this only has to not crash the runtime"
+  },
+  {
+   "id": "q26_unicode",
+   "category": "robustness",
+   "max_new": 128,
+   "prompt": "What does the symbol ⊕ mean in mathematics, and what does µ stand for in µs? Also: 你好.",
+   "must_contain": "exclusive-or or direct sum for the first, micro (10^-6) for the second; the unusual code points must survive the tokenizer, the runtime and the decoder"
+  }
+ ]
+}

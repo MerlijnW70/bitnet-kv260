@@ -1,0 +1,34 @@
+# Build products, never committed.
+__pycache__/
+*.pyc
+
+# Icarus Verilog output from hardware/run-testbenches.sh
+hardware/*.vvp
+hardware/*.log
+
+# Vivado output from hardware/build-ffn.tcl.  The bitstream that ships is
+# firmware/kv260-bitnet.bit.bin; a rebuild lands here and is copied over by hand.
+hardware/work_*/
+hardware/.Xil/
+hardware/*.bit
+hardware/*.bit.bin
+hardware/*.bit.prm
+hardware/*.jou
+hardware/*.str
+hardware/ffn-*.txt
+hardware/vivado*.log
+
+# The device-tree blob is built on the board from the .dtso beside it.
+firmware/*.dtbo
+
+# Output of the board-side self-test.
+selftest/ids-this-board.json
+
+# The packed weights never belong in a repository: about 1.4 GB, derived from
+# microsoft/bitnet-b1.58-2B-4T.  tools/prep.sh writes them somewhere of your choosing.
+*.bin
+!firmware/kv260-bitnet.bit.bin
+manifest.json
+head_t.json
+refdump/
+tokenizer.json

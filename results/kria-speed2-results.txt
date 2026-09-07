@@ -1,0 +1,386 @@
+BitNet b1.58 2B4T on the Kria KV260: FIVE TRITS A BYTE, FOUR POSITIONS A PASS, AND THE SAME WORDS.
+The weight stream carried four ternary weights a byte, two bits each, of which only three of the four
+codes were ever used.  It now carries five a byte in base 3 - byte = sum of (w_j + 1) * 3^j for j = 0..4,
+so 243 of the 256 codes are used - and the bytes a generated token streams fell 603,095,040 -> 483,213,312.
+The engines learned at the same time to hold four activation vectors and answer one pass of the weight
+stream for all four, so the prompt runs four positions at a time.  Before either of those the ARM work was
+moved under the streams that were already running.  This file is the PROVE pass: everything below was
+measured on 2026-09-07 between 05:42 and 06:16 UTC in ONE session on a quiet board, the before and the
+after taken back to back with a bitstream swap between them, and every id compared in place.
+
+  the five bench prompts, three times each, 267 prompt and 876 generated tokens, context 512, one
+  long-lived process a column, the columns twelve minutes apart with the fabric and the model swapped
+  between them:
+                                          prompt tok/s   generation tok/s   a generated token
+    the pre-pass baseline  (two bits)        16.54            14.34             69.757 ms
+    the shipped runtime    (base 3)          28.78            16.78             59.599 ms
+                                             1.740x           1.170x            -10.158 ms
+  the whole 31-prompt battery, 953 prompt and 2097 generated tokens:
+    16.81 / 13.86 tok/s  ->  28.71 / 15.44 tok/s      a generated token 72.134 -> 64.754 ms
+  at 360 positions of context (53 prompt ids, 307 generated, three runs each):
+    16.90 / 12.07 tok/s  ->  27.29 / 14.25 tok/s      (medians)
+  Against bitnet.cpp on this same board, this same model and this same question, run tonight:
+    16.29 against 2.77 tokens/s generated - 5.88x - at 5.15x fewer joules a token and 3.36x less memory.
+  AND NOT ONE GENERATED TOKEN ID DIFFERENT: 38,808 id-against-id comparisons - the four full batteries and
+  three three-repeat bench runs made tonight, against each other and against every stored id file from
+  every earlier stage of this work - every one identical, including against the pre-pass baseline binary
+  run on the pre-pass bitstream in this same session an hour before the last of them.
+
+THE CENTRAL CLAIM, FIRST: NO TOKEN ID CHANGED
+  The battery is the 26 prompts of quality_prompts.json with its system message and the 5 of prompts.json,
+  run greedily through one long-lived process a max_new group.  Every comparison is id by id, in place;
+  a differing id would be named with its prompt and its position.  None was.
+
+  RUN TONIGHT, on the board as it now stands (base 3, batched engines, fabric head unless said otherwise):
+    pv2-ids-fabric.json    the battery, --head fabric                2097 generated ids
+    pv2-ids-arm.json       the battery, --head arm                   2097
+    pv2-ids-pb1.json       the battery, --prompt-batch 1             2097
+    pv2-ids-prehide.json   the battery, the PRE-PASS BASELINE binary on the PRE-PASS bitstream   2097
+    pv2-bench.json         the five bench prompts x 3                 876
+    pv2-bench-prehide.json the same fifteen runs, pre-pass baseline    876
+    pv2-bench-restore.json the same fifteen runs again after the bitstream was swapped away and back  876
+
+  THE SIXTEEN BATTERY COMPARISONS (2097 ids each, all ALL IDENTICAL)
+    1  baseline/ids-arm-baseline.json   vs pv2-ids-fabric   the ids from before any speed work began
+    2  ids-prove-fabric.json            vs pv2-ids-fabric   last pass's proven fabric-head ids
+    3  ids-prove-arm.json               vs pv2-ids-fabric   last pass's arm-head ids
+    4  ids-hide-fabric.json             vs pv2-ids-fabric   after the overlap work, before base 3
+    5  ids-b3-fabric.json               vs pv2-ids-fabric   the DRIVE agent's first base-3 battery
+    6  b3v2-ids-fabric.json             vs pv2-ids-fabric   the DRIVE agent's shipped-binary battery
+    7  baseline/ids-arm-baseline.json   vs pv2-ids-arm
+    8  ids-prove-arm.json               vs pv2-ids-arm
+    9  ids-hide-arm.json                vs pv2-ids-arm
+   10  ids-b3-arm.json                  vs pv2-ids-arm
+   11  pv2-ids-fabric                   vs pv2-ids-arm      the two head modes against each other, tonight
+   12  pv2-ids-pb1                      vs pv2-ids-fabric   one position a forward against four, tonight
+   13  baseline/ids-arm-baseline.json   vs pv2-ids-pb1
+   14  pv2-ids-prehide                  vs pv2-ids-fabric   THE WHOLE PASS, BEFORE AGAINST AFTER, TONIGHT
+   15  pv2-ids-prehide                  vs pv2-ids-arm
+   16  baseline/ids-arm-baseline.json   vs pv2-ids-prehide  the baseline binary reproduces its own ids
+  THE SIX BENCH COMPARISONS (876 ids each, all ALL IDENTICAL)
+   17  b3f-bench-2bit.json  vs pv2-bench   the two-bit bitstream and model, last night
+   18  b3v2-bench-pb4.json  vs pv2-bench   the DRIVE agent's shipped-binary bench
+   19  prove-after.json     vs pv2-bench   last pass's bench, two bits
+   20  b3f-bench-pb1.json   vs pv2-bench   base 3 with the batch turned off
+   21  pv2-bench-prehide    vs pv2-bench   THE WHOLE PASS, BEFORE AGAINST AFTER, TONIGHT
+   22  pv2-bench            vs pv2-bench-restore   the shipped state before and after a bitstream swap
+  16 x 2097 + 6 x 876 = 38,808 id-against-id comparisons, every one the same id in the same place.
+  Verbatim in pv2-compare.txt, pv2-compare-before.txt and pv2-compare-restore.txt.
+
+  COMPARISON 14 IS THE ONE THAT MATTERS MOST.  It is not a comparison against a stored file: at 06:06 the
+  two-bit bitstream was loaded back into the fabric, the two-bit manifest and the two-bit model.bin were
+  put back, and the binary from before this pass began ran the whole battery on it.  Its 2097 ids are the
+  2097 ids the base-3 batched runtime had produced twenty minutes earlier.  Before and after are the same
+  board, the same night, the same prompts, the same tokenizer, and the same answers.
+
+  THE STAGE CHECK against the Hugging Face reference dump, 8 positions x 30 layers, four times tonight:
+  --head fabric, --head arm, --threads 1, and once more after the fabric had been swapped away and back.
+  All four rc 0, all four
+    stage check: every integer stage exact, every float stage above its cosine floor, every top-1 the
+    reference's
+  Each run compares 104 integer stages and reports every one "differ 0 exact"; no line anywhere reads a
+  non-zero difference.  All 8 positions: top-1 the reference's argmax, and the fabric head's argmax equal
+  to the exact head's.  Stronger still, diff against last pass's two-bit prove-stagecheck.txt reports
+  twenty differing lines and every one is a banner or a timing line - the file names and their sizes, the
+  udmabuf offsets, the beats a neuron, the setup seconds, the two --timing lines.  The 234-line numeric
+  body is byte for byte the body the two-bit runtime produced.
+
+  THE GUARD WAS TESTED, not assumed.  With the two-bit manifest in place the base-3 binary refuses to run:
+    bitnet_kria: this build streams base 3, five weights a byte and eighty a beat; the manifest says
+    (none) with 64 a beat and 4 a byte (model.bin). Repack with pack_model.py --encoding base3.
+  (pv2-guard.txt.)  The old file cannot be fed to the new engines, nor the new file to the old ones.
+
+THE BOARD THESE NUMBERS CAME FROM (pv2-state.txt, taken at 05:42:56 UTC before anything ran)
+  ffn.bit.bin        md5 1f7e4fcc5ee4c905ebcfb57f60fe9675     the base-3 batched engines
+  pl0_ref            249999998 Hz, read from /sys/kernel/debug/clk/clk_summary
+  bitnet_kria        md5 a465231b02e7979a5dae152672d33450
+  bitnet_kria.c      md5 12fd73ee5c51d87bd63c0be44cf0a685  =  board/bitnet_kria.c in the tree
+  model3.bin         md5 dbb41a46744c176d31b0ce79bd82f166   417,546,240 B
+  head3_t.bin        md5 97ba6c13749370a39adf42e821578e12    65,667,072 B
+  manifest.json      md5 45cabaf7c91635df93069195d11202d0   stream_format base3, model3.bin,
+                     5 weights a byte, 80 a beat, batch_max 4
+  Linux kria 5.15.0-1027-xilinx-zynqmp aarch64, no users logged in, load average 0.45.
+  The desktop leftovers were stopped first (snapd-desktop-integration, pulseaudio, pipewire and the two
+  xdg portals) and polkit restarted; top showed nothing above 0.0% before the first run.
+  AND THE BOARD WAS LEFT AS IT WAS FOUND: after the two-bit measurements the base-3 bitstream, manifest
+  and head_t.json were put back and re-checked - ffn.bit.bin 1f7e4fcc..., pl0_ref 249999998, manifest
+  45cabaf7..., bitnet_kria a465231b... - and the stage check run once more on the restored fabric (rc 0).
+
+NUMBERS: TOKENS A SECOND
+  THE FIVE BENCH PROMPTS, THREE TIMES EACH (267 prompt and 876 generated tokens, context 512, one
+  long-lived process a column, provebench.py)
+                                     pre-pass baseline    shipped now      ratio
+    prompt, tok/s                        16.54               28.78        1.740x
+    generation, tok/s                    14.34               16.78        1.170x
+    a prompt token, ms                   60.448              34.747
+    a generated token, ms                69.757              59.599       -10.158 ms
+    per repeat, generation tok/s      14.32 14.20 14.48   17.10 16.55 16.70
+  The plan's pre-pass figures were 14.43 tok/s generation and 17.20 prompt; measured tonight on the same
+  binary and the same bitstream, 14.34 and 16.54.  Its 72.1 ms a token is the BATTERY number, and the
+  battery measured 72.134 ms tonight - the same number to three figures.
+
+  THE WHOLE BATTERY (31 prompts, 953 prompt and 2097 generated tokens, context 1024, headcheck.py)
+                                     pre-pass baseline    shipped now
+    prompt, tok/s                        16.81               28.71
+    generation, tok/s                    13.86               15.44
+    a generated token, ms                72.134              64.754
+    the head, ms a call                   7.151               5.402
+  and the same battery with the batch turned off, --prompt-batch 1: 19.74 prompt / 16.03 generation.
+  THE BATTERY'S GENERATION FIGURE IS DRAGGED DOWN BY THREE PROMPTS, AND IT IS WORTH SAYING WHICH.  Batching
+  cannot touch generation - a generated token is one position whatever the flag says - yet the batch-4
+  battery reads 15.44 tok/s against the batch-1 battery's 16.03.  Prompt by prompt the difference is
+  scatter around zero except for three prompts whose shift scan blew up: q20_forloop (scan 20.257 ms a
+  forward against a 2.7 ms norm, +21.169 ms a token over 160 tokens), q11_wordproblem (7.850, +10.389 over
+  106) and q22_nl_uitleg (7.993, +5.104 over 160).  Those three carry 5,305 ms; the whole difference
+  between the two batteries is 4,980 ms.  Take them out and the batch-4 battery reads 62.224 ms a token
+  against batch-1's 62.379.  It is the stall described at the end of this file, not the batch.
+
+  AT 360 POSITIONS (bench-battery-q23_long.txt, 53 prompt ids and 307 generated, context 512)
+    pre-pass baseline, two bits    prompt 16.95 / 16.88 / 16.90    generation 12.07 / 12.07 / 12.06
+    base 3, --prompt-batch 4       prompt 27.61 / 27.23 / 27.29    generation 14.26 / 13.78 / 14.25
+    base 3, --prompt-batch 1       prompt 20.11 / 19.50 / 20.13    generation 14.24 / 13.92 / 13.94
+  Generation is the same number whichever batch the prompt used, as it must be; the prompt is not.
+  No run of the six carried the shift-scan stall this time - every one of them scanned in 2.65 to 2.94 ms.
+
+  AT SHORT CONTEXT (bench:crc32, 30 prompt ids and 77 generated, context 512)
+    base 3, --prompt-batch 4       prompt 27.80 / 28.85 / 27.63    generation 17.30 / 16.86 / 16.84
+    base 3, --prompt-batch 1       prompt 18.88 / 20.54 / 20.46    generation 16.62 / 16.65 / 17.14
+
+  THE SHIPPED STATE REPRODUCES ITSELF.  The five bench prompts x 3 were run twice tonight, twenty minutes
+  and two bitstream loads apart: 28.78 / 16.78 tok/s the first time, 29.11 / 16.81 the second (over its
+  warm repeats - see the cold-cache note at the end), the same 876 ids both times.
+
+NUMBERS: MILLISECONDS A FORWARD (breakdown.py over the runtime's own --timing lines).  The first two
+columns are the same fifteen bench runs, weighted over all 1131 forwards and 876 head calls; the third is
+the three bench:crc32 runs at --prompt-batch 1, 318 forwards and 231 head calls.
+                                    pre-pass baseline   shipped now    a single position, base 3
+    engines qkv                          6.056             3.743              4.297
+    engines o                            3.688             2.988              3.502
+    engines gate+up                     19.825            14.913             17.377
+    engines down                         9.909             6.651              7.635
+    engines together                    39.478            28.294             32.810
+    activation loads                     1.085             0.752              0.882
+    glue pass A                          3.441             3.435              3.433
+    glue pass B                          3.426             3.416              3.417
+    shift scan                           2.918             2.768              2.497
+    sums out of the DMA buffer           0.991             0.868              0.281
+    attention                            6.403             4.493              4.780
+    norms, quant, RoPE, residuals        3.824             3.414              3.498
+    waiting on the side thread           0.098             0.008              0.009
+    forward total                       62.544            50.015             53.452
+    side thread busy                     4.674             3.296              3.348
+    the head, a call                     7.195             5.409              5.428
+      stage 1, the ternary stream        5.991             4.123              4.107
+      its activation load                0.009             0.007              0.007
+      sync, scale and the top-256        0.994             1.068              1.106
+      stage 2, the exact rescore         0.194             0.200              0.196
+  READ THE MIDDLE AND RIGHT COLUMNS TOGETHER.  In the middle column the prompt runs four positions to a
+  pass of the weight stream, and the runtime counts forwards by POSITION, so every engine line there is
+  the stream amortised over positions and is NOT what a generated token costs.  The right column is the
+  crc32 prompt run again with --prompt-batch 1, where every forward is one position and one whole pass -
+  which is exactly what generation always is.  The lines that do not touch the stream (the glue, the
+  norms, the scan) agree across all three columns, as they should.
+  The pre-pass column needs no such caveat: that binary had no batch at all.
+
+  SO, THE COST OF A GENERATED TOKEN, MEASURED THREE WAYS AT ONE POSITION A FORWARD:
+    the battery, mean over its 31 prompts     32.799 ms of engines   (min 32.714, max 33.220)
+    bench:crc32 at ~100 positions             32.810 ms
+    q23_long at 360 positions                 33.246 ms
+  32.8 ms, and it does not care about the context - which is what a pure stream should look like.
+
+NUMBERS: BYTES, AND WHAT FRACTION OF A TOKEN IS THE STREAM
+    matrix        N      K      2-bit bytes   base-3 bytes   beats a neuron   padding trits
+    q_proj      2560   2560      1638400        1310720        40 -> 32            0
+    k_proj       640   2560       409600         327680        40 -> 32            0
+    v_proj       640   2560       409600         327680        40 -> 32            0
+    o_proj      2560   2560      1638400        1310720        40 -> 32            0
+    gate_proj   6912   2560      4423680        3538944        40 -> 32            0
+    up_proj     6912   2560      4423680        3538944        40 -> 32            0
+    down_proj   2560   6912      4423680        3563520       108 -> 87           48
+    a layer                     17367040       13918208
+    30 layers                  521011200      417546240    80.142%
+    head_t     128256  2560      82083840       65667072       40 -> 32            0    80.000%
+    a generated token          603095040      483213312    80.12%
+  down_proj's 48 zero trits a neuron cost 9.6 bytes a neuron and 737,280 bytes over the model; without
+  that padding the model would be 416,808,960 B.  Every matrix still starts on a 4096-byte boundary.
+
+  Four engines take one 16-byte beat a clock each at 250 MHz: 16.0 GB/s if the memory can feed them.
+    the model stream  417,546,240 B in 32.799 ms = 12.73 GB/s   79.6% of the beat rate
+    the head stream    65,667,072 B in  4.103 to 4.123 ms = 15.93 to 16.01 GB/s   99.5 to 100.0%
+    the fabric's own floor: 26.097 ms for the model + 4.104 for the head = 30.201 ms a token
+    (the pre-pass baseline, measured tonight for comparison: model 521,011,200 B in 39.478 ms =
+     13.20 GB/s, 82.5%; head 82,083,840 B in 5.991 ms = 13.70 GB/s, 85.6% - that head had not yet been
+     cut into chunks, which is the overlap work, not the packing)
+  THE HEAD STREAM IS THE MOST INTERESTING NUMBER IN THIS FILE.  Over four different runs and 3103 head
+  calls it lands on the four engines' beat rate to within the measurement's own half-percent: 4.103 ms at
+  360 positions, 4.107 at one position a forward, 4.116 and 4.123 in the bench runs.  The DDR on this
+  board can feed the fabric at its full 16.0 GB/s in a long sequential read.
+  OF A 59.599 ms GENERATED TOKEN, THE WEIGHT STREAM IS 32.80 + 4.12 = 36.92 ms = 61.9%.
+  The whole fabric - the engines, the activation loads, the two glue passes and the head - is
+  32.80 + 0.88 + 6.85 + 5.43 = 45.96 ms = 77.1%.  The A53s hold the other 13.6 ms: attention 4.78,
+  norms and quantisation 3.50, the shift scan 2.50, the sums out 0.28, and about 2.5 unaccounted.
+
+POWER (board/power-bitnet.sh with board/ina260-sample.py at 50 ms, the INA260 seeing the whole board;
+the same sixteen-id question and 80 generated tokens under each bitstream, a quarter of an hour apart,
+with the fabric and the model files swapped between them)
+                                  pre-pass baseline      shipped now
+    idle, that bitstream loaded        3.535 W              3.808 W
+    prompt                             5.726 W              5.148 W
+    generation                         5.744 W              6.206 W
+    generation seconds                 5.550                4.911
+    generation tok/s                  14.41                16.29
+    joules a generated token           0.3985               0.3810     -4.4%
+    joules over idle                   0.1533               0.1472     -4.0%
+  The rate rose 13.0% and the energy a token fell only 4.4%, because the new bitstream idles 0.274 W
+  higher: the batched engine's 40 UltraRAMs cost about a quarter of a watt at rest whether or not a token
+  is being made.  That is a real cost and it is why the energy improves less than the speed.
+  A LONGER GENERATION on the shipped runtime (25 prompt ids, 256 generated, context 512):
+    prompt      5.249 W over  1.072 s,  25 tokens = 23.32 tok/s, 0.225 J a token
+    generation  6.159 W over 17.239 s, 256 tokens = 14.85 tok/s, 0.415 J a token, 0.158 J over idle
+  MEMORY: max RSS 412,652 kB (/usr/bin/time -v over bench:crc32 at context 512).
+
+BITNET.CPP ON THE SAME BOARD, THE SAME MODEL AND THE SAME QUESTION, RUN TONIGHT (board/power-bitnetcpp.sh;
+llama-completion, the i2_s GGUF, 4 threads, --temp 0, -n 80, the same bitnet_chat.jinja and no system
+message on either side; the board answers the same 16 prompt ids.  Segmented by llama's own milliseconds
+with llamaseg.py)
+    phase              bitnet.cpp                         bitnet_kria (base 3, fabric head)
+    idle               3.790 W                            3.808 W
+    load               32.924 s                           1.327 s of setup
+    prompt eval        5.275 W over  3.790 s, 17 tokens   5.148 W over 0.628 s, 16 tokens
+    generation         5.438 W over 28.520 s, 79 tokens   6.206 W over 4.911 s, 80 tokens
+    generation          2.77 tok/s, 1.963 J a token       16.29 tok/s, 0.381 J a token
+    prompt              4.49 tok/s, 1.176 J a token       25.48 tok/s, 0.202 J a token
+    max RSS            1,386,672 kB                       412,652 kB
+  Generation: 5.88x the rate at 5.15x fewer joules a token (4.04x counting only the increment over idle).
+  Prompt: 5.68x the rate at 5.82x fewer joules.  Memory: 3.36x less resident.
+  bitnet.cpp is untouched by any of this work and reproduces its own numbers: 4.49 / 2.77 tok/s tonight
+  against 4.49 / 2.64 last night and 4.48 / 2.72 the pass before.
+
+WHAT IS LEFT, AND WHAT THE NEXT CEILING IS
+  Of a 59.6 ms generated token at the bench prompts' context:
+    the engines' weight stream   32.80 ms   55.0%
+    the two glue passes           6.85      11.5%
+    the head                      5.43       9.1%   (4.12 of it its own ternary stream)
+    attention                     4.78       8.0%   (14.6 ms at 360 positions)
+    norms, quantisation, RoPE     3.50       5.9%
+    the shift scan                2.50       4.2%
+    the activation loads          0.88       1.5%
+    the sums out of the buffer    0.28       0.5%
+  The fabric holds 77% of the token; 61.9% of it is weight bytes moving.
+
+  THE PACKING IS FINISHED.  These weights carry about 1.55 bits of entropy each and base 3 spends 1.585
+  (8 bits / 5 weights).  Under 2% is left between this packing and the entropy floor, and taking it would
+  need a variable-length code the fabric would have to decode serially.  There is no next fifth.
+
+  WHAT IS THERE, in the order I would take it:
+  1. FEWER, LONGER ENGINE RUNS - the biggest measured gap, 6.70 ms a token.  The model stream takes
+     32.80 ms against the fabric's 26.10 ms floor.  That gap is NOT the memory: the head stream, one long
+     sequential read of 65,667,072 bytes, runs at 15.93 to 16.01 GB/s - the four engines' whole beat rate -
+     and it runs at that rate on the same DDR in the same token.  What differs is that the model is streamed
+     in 120 short runs a token (four engine phases over thirty layers), each with its activation reload,
+     its register writes, its DMA descriptor setup, its completion poll and its drain.  The two-bit
+     stream carried the same 6.9 ms of it; base 3 did not create this, it only made it a larger share.
+  2. BATCHED GENERATION ACROSS INDEPENDENT CONVERSATIONS.  The engines already answer one pass of the
+     stream for four vectors and the prompt already uses it; generation cannot within one conversation,
+     because token t + 1 needs token t, but four separate conversations have no such dependency and
+     ctrl[10:9] already carries the batch.  PROJECTION, not measured: at two passes a batch of four, the
+     stream would cost about 16.4 ms a token each against 32.80.  Nothing in the fabric would change; the
+     token loop would.
+  3. THE GLUE, 6.85 ms a token in two passes over 6912 elements - 11.5% of a token, and the one part of
+     the pipeline that has not been looked at since it was built.
+  PROJECTIONS, each marked as one and none of them measured: lever 1 taken in full would put a token at
+  59.6 - 6.7 = 52.9 ms, 18.9 tok/s.  Lever 2 taken in full would put it at 59.6 - 16.4 = 43.2 ms for each
+  of four conversations, 23.1 tok/s each.  They do not simply add - lever 2 halves the very stream lever 1
+  shortens - and the floor under both, every ARM millisecond hidden and every byte moving at the beat
+  rate, is the 30.2 ms the fabric needs, 33 tokens a second.
+
+THE OPEN ITEM, HONESTLY: THE SHIFT-SCAN STALL
+  Sometimes a run's shift scan costs three to eight times its 2.7 ms norm and the whole forward wears it.
+  Tonight it hit three of the 31 prompts of the batch-4 battery (q20_forloop 20.257 ms a forward,
+  q22_nl_uitleg 7.993, q11_wordproblem 7.850) and none of the 31 of the batch-1 battery, none of the six
+  360-position runs, and none of the three bench repeats.  It is not the batch's and not base 3's: the
+  same stall appears in the two-bit runs of last night and in --prompt-batch 1 runs.  It is worth 2.4 ms
+  a token on a battery average when it lands and nothing when it does not.  It is not diagnosed and it is
+  not a regression, but it is the reason a battery figure and a bench figure disagree by more than noise,
+  and it should be chased before the next round of numbers is taken.
+
+  A SECOND TRAP, FOUND TONIGHT: after the model files are swapped, the first run reads the model from
+  storage instead of the page cache - 8.13 s at 51 MB/s against 0.87 s at 482 MB/s - and its first prompt
+  is worthless (6.52 tok/s prompt, a 967 ms shift scan on one forward) while the readahead is still in
+  flight.  The very same process's second and third repeats gave 29.11 / 16.81 tok/s.  Discard the first
+  repeat after any swap; do not average it in.
+  AND THE OLD TRAP STILL STANDS: measure on a quiet board.  An ssh login while a run is in flight takes a
+  core off four spinning pool threads.  Every number above was taken with nothing logged in and nothing
+  polling: both measurement scripts were launched detached and waited for by a single connection that
+  slept on the board until a marker file appeared.
+
+WHAT THE FABRIC COSTS (the BUILD agent's report, not re-measured here - Vivado was not run in this pass)
+  post-route, slow corner, -2LV: WNS 0.108 ns, TNS 0.000, WHS 0.010, THS 0.000, 0 failing endpoints of
+  178,007, "All user specified timing constraints are met", 0 critical warnings in any run.
+  42,271 CLB LUTs (36.09%), 53,342 registers (22.77%), 95 of 144 BRAM tiles, 40 of 64 URAM, 0 DSP.
+  An engine is 4,179 LUT / 1,829 FF / 10 RAMB36 / 10 URAM, against 1,353 / 787 / 8 / 0 for the two-bit
+  engine: 3.09x the LUTs and 2.32x the flip-flops, for a fifth fewer bytes and four vectors a pass.
+  The address map did not change; the ctrl/status bit map did.
+
+FILES
+  board/research/ternary/bitnet/kria-speed2-results.txt   this file
+  board/research/ternary/bitnet/pv2-state.txt             the board's md5s, clock and quiet, before anything ran
+  board/research/ternary/bitnet/pv2-compare.txt           thirteen battery and four bench comparisons
+  board/research/ternary/bitnet/pv2-compare-before.txt    the pre-pass baseline against tonight, id by id
+  board/research/ternary/bitnet/pv2-compare-restore.txt   the shipped state before and after the swap
+  board/research/ternary/bitnet/pv2-stagecheck-fabric.txt the stage check, --head fabric
+  board/research/ternary/bitnet/pv2-guard.txt             the runtime refusing the two-bit manifest
+  board/research/ternary/bitnet/pv2-swap.txt              the bitstream swap and the restore, with md5s and the clock
+  board/research/ternary/bitnet/pv2-360.txt               six runs at 360 positions, base 3
+  board/research/ternary/bitnet/pv2-360-prehide.txt       three at 360 positions, the pre-pass baseline
+  board/research/ternary/bitnet/pv2-short.txt             three runs of bench:crc32
+  board/research/ternary/bitnet/pv2-short-pb1.txt         the same at one position a forward
+  board/research/ternary/bitnet/pv2-power-long.txt        256 generated tokens with the INA260 running
+  board/research/ternary/bitnet/pv2-power-lfl.txt         the like-for-like 80, base 3
+  board/research/ternary/bitnet/pv2-power-lfl-prehide.txt the like-for-like 80, pre-pass baseline
+  board/research/ternary/bitnet/pv2-cpp.txt               bitnet.cpp, the same question, tonight
+  board/research/ternary/bitnet/pv2-rss.txt               max resident set size
+  board/research/ternary/bitnet/pv2-bench.json            the fifteen bench runs and their ids, shipped
+  board/research/ternary/bitnet/pv2-bench-prehide.json    the fifteen bench runs, pre-pass baseline
+  board/research/ternary/bitnet/pv2-ids-fabric.json       the battery and its 2097 ids, shipped
+  board/research/ternary/bitnet/pv2-ids-prehide.json      the battery, pre-pass baseline binary and bitstream
+  board/research/ternary/bitnet/pv2-progress.txt          when each stage of the session ran
+  on the board, /home/ubuntu/bitnet-kria/: the same pv2-* files, prove2-a.sh and prove2-b.sh that made
+  them, model3.bin, head3_t.bin, manifest.json and head_t.json (base 3), with the two-bit model.bin,
+  head_t.bin, manifest-2bit.json and head_t-2bit.json kept beside them; baseline/bitnet_kria_prehide is
+  the binary from before this pass and baseline/ids-arm-baseline.json its ids.
+  on the board, /home/ubuntu/ffn/: ffn.bit.bin (base 3, restored), ffn-base3.bit.bin, ffn-2bit.bit.bin,
+  ffn.dtso, ffn.dtbo.  The overlay names the firmware ffn.bit.bin, so a swap is a COPY OVER that name;
+  pointing fpgautil at another file leaves the old bitstream in the fabric.
+
+HOW TO REPRODUCE, on the board, in this order
+  quiet it        systemctl --user stop snap.snapd-desktop-integration.snapd-desktop-integration.service \
+                    pulseaudio.service pipewire.service pipewire-media-session.service \
+                    xdg-document-portal.service xdg-permission-store.service
+                  sudo systemctl restart polkit
+  the state       md5sum /home/ubuntu/ffn/ffn.bit.bin bitnet_kria bitnet_kria.c model3.bin head3_t.bin
+                  sudo grep ' pl0_ref ' /sys/kernel/debug/clk/clk_summary        -> 249999998
+  the stage check sudo -A ./bitnet_kria --stage-check refdump/stages.bin --head fabric --threads 4
+  the battery     python3 headcheck.py OUT.json --head fabric --exe ./bitnet_kria
+                  python3 headcheck.py --compare baseline/ids-arm-baseline.json OUT.json
+  the bench       python3 provebench.py --exe ./bitnet_kria --head fabric --repeats 3 --out OUT.json
+                  python3 provebench.py --compare BEFORE.json OUT.json
+                  python3 breakdown.py OUT.json
+  one position    printf '#!/bin/sh\nexec ./bitnet_kria "$@" --prompt-batch 1\n' > pb1.sh; chmod +x pb1.sh
+                  python3 headcheck.py OUT.json --head fabric --exe ./pb1.sh
+  360 positions   sudo -A ./bitnet_kria --max-new 307 --context 512 --threads 4 --head fabric --timing \
+                    --quiet < bench-battery-q23_long.txt
+  power           sudo -A env EXE=./bitnet_kria FLAGS="--head fabric" IDS=ids-lfl.txt NEW=80 CTX=512 \
+                    LOG=p.log MARKS=p.marks RUN=p-run.log ./power-bitnet.sh
+  bitnet.cpp      sudo -A env NEW=80 THREADS=4 CTX=2048 ./power-bitnetcpp.sh
+                  python3 llamaseg.py /home/ubuntu/bitnet/bitnetcpp-power.log .../bitnetcpp-power-run.err
+  back to two bits, and back again
+                  cp manifest-2bit.json manifest.json; cp head_t-2bit.json head_t.json
+                  cp /home/ubuntu/ffn/ffn-2bit.bit.bin /home/ubuntu/ffn/ffn.bit.bin
+                  cd /home/ubuntu/ffn && sudo rmdir /sys/kernel/config/device-tree/overlays/full
+                  sudo fpgautil -b ffn.bit.bin -o ffn.dtbo     (173 ms; check pl0_ref again)
+                  then baseline/bitnet_kria_prehide is the pre-pass binary; reverse with manifest-b3.json,
+                  head_t-b3.json and ffn-base3.bit.bin, and throw the first run away (cold page cache).
+  Both scripts of this session are on the board as prove2-a.sh (the shipped state: stage checks, three
+  batteries, the bench, the long and short runs, power, bitnet.cpp, the comparisons) and prove2-b.sh (the
+  swap to the pre-pass baseline, its battery and bench and power, the restore, and the re-check).

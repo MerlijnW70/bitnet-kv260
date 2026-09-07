@@ -1,0 +1,559 @@
+AN EDGE DEVICE THAT ANSWERS FROM ITS OWN DATA, WITH NO NETWORK IN THE LOOP AT ALL.
+microsoft/bitnet-b1.58-2B-4T, all 30 layers, every matrix product in the KV260's fabric, doing two
+jobs a cloud service would need a connection for: triaging equipment alarms into strict JSON, and
+reading its own sensors and reporting on itself.  Measured on 2026-09-07 between 09:40 and 11:07 UTC
+on one quiet board.  Forty alarms through the fabric, the same forty through bitnet.cpp on the same
+board's four A53 cores, and the same forty through the checkpoint in bf16 on an RTX 4080.
+
+  THE THREE HEADLINE NUMBERS, all forty lines, all three ways given the same prompt text:
+
+                                     board (fabric)     bitnet.cpp (A53)      RTX 4080 (bf16)
+    strict JSON, first try            40/40  1.000       40/40  1.000          40/40  1.000
+    category right (30 clear)         19/30  0.6333      20/30  0.6667         19/30  0.6333
+    severity right (30 clear)         16/30  0.5333      13/30  0.4333         16/30  0.5333
+    both right      (30 clear)        12/30  0.400       10/30  0.3333         12/30  0.400
+    ms an answer, mean               14,549.9           77,703.1              1,504.1
+    joules an answer, mean               79.547            400.552            not measured
+    watts while answering                 5.467              5.155            not measured
+
+  The board answers 5.34x faster than bitnet.cpp on the same silicon at 5.04x fewer joules, and it
+  is not one point less accurate than the same model in bf16 on a 4080: on the thirty clear lines
+  the board and the GPU score identically, and 26 of the 40 answers are identical TOKEN FOR TOKEN.
+  Every one of the eighteen mistakes the board makes on the clear lines, the RTX 4080 makes too, the
+  same way.  The demo's weakness is the model, not the board.  It is stated plainly below.
+
+SETUP
+  board      hostname kria, KV260, Ubuntu 22.04, up 3.2 days, /sys/class/fpga_manager/fpga0/state
+             = operating, the shipped bitstream and the shipped bitnet_kria, untouched by this pass
+  runtime    bitnet_kria --dir /home/ubuntu/bitnet-kria --max-new 96 --context 512 --threads 4
+             --cache-dtype f32, greedy decoding, so every answer here is reproducible
+  process    ONE bitnet_kria held open for the whole run, opened in 1.169 s
+  app        board/edge_monitor.py, --job both --selftests 3 --saving 5 --idle 20
+  alarms     board/research/ternary/bitnet/edge_alarms.json, 40 lines, 30 clear + 10 marked
+             ambiguous, balanced over the seven categories, 13 critical / 20 warning / 7 info
+  wall       the main run 802.4 s for 53 answers; the first answer began 09:40:26Z and the last
+             ended 09:53:47Z, 800.7 s of that spanned by the answers themselves.  The bitnet.cpp
+             baseline ran afterwards, 10:15:51Z to 11:07:40Z.
+  power      the INA260 at /sys/class/hwmon/hwmon2 read by a thread holding the three sysfs files
+             open, every 50 ms, trapezoid-integrated over each answer's own start and stop
+  same bytes to all three ways: the system message is lifted out of edge_monitor.py by parsing its
+             source (make_edge_prompts.py) and the user turn is "Alarm: " + the line, so the prompt
+             cannot drift between the ways.  bitnet_chat.chat_text and bitnet_chat.jinja are the same
+             template character for character, which the token counts confirm: the RTX 4080's prompt
+             length equals the board's on 40 of 40 lines.  bitnet.cpp is one token longer on 40 of
+             40, exactly one, because llama.cpp prepends a BOS the other two do not.  That one token
+             is the only difference between the three inputs and it is declared here rather than
+             hidden.
+
+JOB 1, ALARM TRIAGE
+  One line of equipment telemetry in, one line of JSON out and nothing else, so a real gateway could
+  act on it without a human reading it:
+    {"category": one of mechanical|electrical|thermal|sensor|network|software|none,
+     "severity": one of critical|warning|info,
+     "action":   one short imperative sentence for the technician}
+
+  FORMAT.  This is where the board is flawless.
+    strict JSON on the first try                    40 of 40   (json.loads on the stripped answer;
+                                                                no first-{-to-last-} rescuing)
+    keys exactly {category, severity, action}       40 of 40
+    category inside its seven-word vocabulary       40 of 40
+    severity inside its three-word vocabulary       40 of 40
+    action a non-empty string                       40 of 40
+    no greeting, no code fence, no second line      40 of 40
+  bitnet.cpp and the RTX 4080 also scored 40 of 40 on every one of those, so the format is the
+  prompt's doing, not the board's.  The prompt earns it by naming both vocabularies inline as
+  literal word lists, showing the single-line shape with placeholders, forbidding the failure modes
+  by name, and carrying two one-shot examples of which the second is a benign line; without a benign
+  exemplar a small model narrates informational lines instead of emitting JSON for them.
+
+  ACCURACY.  This is where the model is weak, and the weakness is not the board's.
+    over the 30 clear lines     category 19/30 = 0.6333    severity 16/30 = 0.5333   both 12/30 = 0.400
+    over the 10 ambiguous       category  4/10 = 0.400     severity  6/10 = 0.600
+    over all 40                 category 23/40 = 0.575     severity 22/40 = 0.550
+  The ground truth is the labelling agent's own reading, justified one clause per line in
+  edge_alarms.json.  The ten ambiguous lines are scored separately and never folded into the
+  headline.  No severity definitions were put in the system prompt: writing "critical means already
+  past a trip level" would be tuning the prompt to this particular ground truth and would make the
+  number dishonest.
+
+  WHERE THE ACCURACY GOES, which the single number hides.  Category against severity, all forty:
+
+    category, board (rows are the truth, columns what came back)
+                 mechanical electrical thermal  sensor  network software    none   total
+      mechanical      7          0        0        0       0        0         1       8
+      electrical      0          5        0        0       0        0         1       6
+      thermal         2          0        3        0       0        0         0       5
+      sensor          2          1        0        1       0        0         2       6
+      network         0          0        0        0       4        0         0       4
+      software        0          0        0        0       1        0         4       5
+      none            3          0        0        0       0        0         3       6
+      answered       14          6        3        1       5        0        11      40
+
+    severity, all three ways (rows are the truth)
+                        board                bitnet.cpp              RTX 4080
+                 crit  warn  info      crit  warn  info      crit  warn  info   total
+      critical     1    10     2         0    11     2         1    10     2      13
+      warning      0    15     5         0    14     6         0    14     6      20
+      info         0     1     6         0     1     6         0     1     6       7
+      answered     1    26    13         0    26    14         1    25    14      40
+
+  TWO THINGS FALL OUT OF THOSE TABLES AND THEY ARE THE REAL RESULT OF THIS DEMO.
+    1  THE SEVERITY AXIS IS ALL BUT DEAD.  The board said "critical" once in forty lines.  Twelve of
+       the thirteen genuinely critical lines came back as warning or info: a bearing at 11.4 mm/s
+       against a 7.1 trip and still climbing, an earth fault that had already opened a breaker, a
+       winding at 2.4 Mohm against a 5 Mohm minimum, a VFD eight degrees from tripping, a
+       transmitter pinned at the 4.00 mA rail for 47 minutes.  bitnet.cpp said "critical" ZERO times
+       in forty.  The RTX 4080 said it once, on the same line the board did.  This is a property of
+       the 2B model at this prompt, reproduced on three different pieces of arithmetic.
+    2  ONE OF THE SEVEN CATEGORIES IS NEVER USED.  The board answered "software" 0 times in 40,
+       although five lines are software faults; all five went to "none" or "network".  A watchdog
+       expiry became none/info, a firmware CRC mismatch became network/warning.  The RTX 4080 does
+       exactly the same.  bitnet.cpp used "software" once, on the firmware CRC line, and is the only
+       way that got that line's category right.
+  Category holds up much better than severity.  Over all forty lines: mechanical 7/8, electrical
+  5/6, network 4/4.  Sensor is the weak one -- 1 of 6 over all forty, and 0 of the 4 clear sensor
+  lines, the single one it got being the ambiguous a06 -- which matters, because "the instrument is
+  lying" is exactly the fault an edge gateway is bought to catch.
+
+  SPEED AND ENERGY, board.
+    14,549.9 ms an answer mean   min 13,319.4   max 16,216.6   median 14,597.7
+    253.8 prompt tokens an answer, 31.1 generated
+    prompt eval 23.73 tok/s, generation 8.08 tok/s at this ~270-token context
+    of the 14,550 ms: 10,699 ms is prompt eval, 3,850 ms is generation, 1 ms is everything else.
+      The answer is 73.5 percent prompt.  The system message buys 100 percent JSON compliance and
+      costs about 10.7 s of the 14.5; shortening it trades directly against the compliance figure,
+      so it was left long.
+    79.547 J an answer   min 72.308   max 88.561   total 3,181.9 J for the forty
+    5.467 W mean while answering, against 3.8213 W measured idle over 20 s (393 samples) immediately
+      before the run.  The work itself is 1.645 W above idle, which is 23.94 J an answer.
+    peak 6.490 W in any 50 ms sample.
+
+JOB 2, THE BOARD REPORTS ON ITSELF
+  The application reads the board's real sensors and asks the model for two sentences a maintenance
+  engineer would want.  Three self-reports were taken.  All three quoted the readings back
+  correctly; none of them was two sentences.
+    (generated-id counts exclude the end-of-turn token, so they compare with the GPU's directly)
+    self01  18,435 ms, 253 prompt ids, 63 generated, 3 sentence ends, 38 words, 103.316 J
+    self02  20,960 ms, 253 prompt ids, 82 generated, 4 sentence ends, 56 words, 118.865 J
+    self03  19,027 ms, 253 prompt ids, 66 generated, 3 sentence ends, 44 words, 106.921 J
+    verdict clause present on 3 of 3; 19,474 ms and 109.701 J an answer
+
+  IS THE THREE-SENTENCE SHAPE THE BOARD OR THE MODEL?  The three self-report turns, with the board's
+  own real readings in them, were handed verbatim to the checkpoint in bf16 on the RTX 4080.
+    self01  identical text, IDENTICAL TOKEN FOR TOKEN (63 ids), 3 sentences both ways
+    self02  different: board 4 sentences / "Nothing needs attention", GPU 3 / "Attention needed"
+    self03  identical text, IDENTICAL TOKEN FOR TOKEN (66 ids), 3 sentences both ways
+    sentence ends, board 3 4 3; GPU 3 3 3.  Neither ever produced two.
+  So the format failure is the model's and not the board's.
+
+  A WORSE PROBLEM THAN THE SENTENCE COUNT, and it is the honest finding of job 2: the verdict is not
+  driven by the readings.  On self03 the board answered "Attention needed." on 3.82 W, a 30.9 C
+  processor die, a 28.8 C fabric die, 2215 MB free and the fabric operating -- nothing on that list
+  warrants attention -- and it gave no reason, although the system message asks for
+  "Attention needed:" followed by one.  On self02 the board said "Nothing needs attention" and the
+  RTX 4080, on the identical readings, said "Attention needed".  Two ways of running the same model
+  disagreeing about the verdict on the same benign numbers is the plainest possible statement that
+  the verdict carries no information.  The application records `sentences`, `words` and `verdict` on
+  every reply, so this is reported rather than hidden.
+
+THE TWO BASELINES, the same forty prompts
+  bitnet.cpp on this same board's four A53 cores, the speed baseline
+    build/bin/llama-cli -m ggml-model-i2_s.gguf -t 4 -n 96 -c 2048 --temp 0 -ngl 0 --jinja
+      --chat-template-file bitnet_chat.jinja -cnv -st -v, one invocation an answer
+    40/40 strict JSON.  category 20/30 clear, severity 13/30, both 10/30.
+    77,703.1 ms an answer mean   min 71,380   max 122,779   median 76,751
+    prompt eval 4.471 tok/s, generation 2.560 tok/s
+    400.552 J an answer   min 368.619   max 579.528   total 16,022.1 J
+    5.1547 W mean over the whole 3,108.9 s (51.8 minutes) it took to answer forty alarms
+    idle measured 3.8463 W before it and 3.8456 W after, agreeing with the board run's 3.8213 W
+    AGAINST THE FABRIC: 5.34x slower an answer, 5.04x more joules an answer, and no better at the
+    job -- one category better, three severities worse.
+  the HF checkpoint in bf16 on an RTX 4080, the quality baseline
+    transformers 5.3.0, torch 2.6.0+cu124, do_sample=False, the checkpoint's own chat template
+    40/40 strict JSON.  category 19/30 clear, severity 16/30, both 12/30 -- IDENTICAL to the board.
+    1,504.1 ms an answer mean   min 1,051   max 1,859
+
+  HOW FAR THE WAYS AGREE, answer by answer, greedy on all three
+    board vs RTX 4080   prompt length identical 40 of 40, generated ids identical 26 of 40,
+                        answer text identical 26 of 40, category AND severity identical 38 of 40
+                        (they differ only on a03 and a06, both marked ambiguous)
+    board vs bitnet.cpp prompt length +1 on 40 of 40 (BOS), generated ids identical 9 of 40
+    bitnet.cpp vs GPU   generated ids identical 9 of 40
+  bitnet.cpp diverges from the other two because it runs a different quantisation (i2_s GGUF) with a
+  different arithmetic order; the board runs the same ternary weights the checkpoint holds.  That is
+  why 26 of 40 board answers match the 4080 exactly and only 9 of 40 match bitnet.cpp.
+
+  WHAT THE BOARD GETS WRONG, AND WHETHER THE GPU GETS IT WRONG TOO.  All eighteen of the board's
+  mistakes on the thirty clear lines, with the 4080's answer on the same line:
+    c01 mechanical/critical -> mechanical/warning   GPU identical
+    c06 electrical/critical -> electrical/warning   GPU identical
+    c07 electrical/critical -> electrical/warning   GPU identical
+    c09 electrical/critical -> electrical/warning   GPU identical
+    c10 electrical/warning  -> none/info            GPU identical
+    c11 thermal/critical    -> thermal/warning      GPU identical
+    c13 thermal/warning     -> mechanical/warning   GPU identical
+    c14 thermal/info        -> thermal/warning      GPU identical
+    c15 sensor/critical     -> none/info            GPU identical
+    c16 sensor/warning      -> mechanical/warning   GPU identical
+    c17 sensor/critical     -> mechanical/warning   GPU identical
+    c18 sensor/info         -> none/info            GPU identical
+    c19 network/critical    -> network/warning      GPU identical
+    c23 software/critical   -> none/info            GPU identical
+    c24 software/critical   -> network/warning      GPU identical
+    c25 software/warning    -> none/info            GPU identical
+    c26 software/warning    -> none/info            GPU identical
+    c30 none/info           -> mechanical/info      GPU identical
+  EIGHTEEN OF EIGHTEEN.  Not one of the board's mistakes is the board's.
+
+WHAT ONE LONG-LIVED PROCESS SAVES
+  Five alarms answered on the process already open, then the same five each on a process started for
+  that one answer:
+    on the open process        15,132.9 ms an answer
+    on a fresh process each    16,042.8 ms end to end, of which 1,057.0 ms is setup
+    saving                        909.9 ms an answer, 5.67 percent of end to end
+    the five answers were IDENTICAL in both modes, so the saving is pure overhead, not a different
+    answer.
+  Two caveats.  Setup was 1.057 s warm here but 1.169 s on the first open of this session and has
+  been seen at 1.52 s with a cold page cache, so the saving is a floor.  And bitnet_kria restarts
+  its KV cache for every line of ids it reads, so what is being reused is the process and the 521 MB
+  of weights in udmabuf0 -- not any cached context.  (An earlier build-agent measurement of the same
+  thing gave 1,256.7 ms / 8.0 percent; this pass measured 909.9 ms / 5.67 percent.  Both are real;
+  the difference is page-cache state on the fresh opens.)
+
+THE OFFLINE PROOF
+  The claim: nothing crossed any interface for the inference.  Networking was NOT disabled -- that
+  would have cut the link to the board -- so the claim is proved by measurement, three ways.
+
+  1  A RUN WITH NO SESSION ON THE BOARD AT ALL.  The proof run was launched with setsid+nohup and
+     the launching ssh returned immediately; the script then slept 45 s so that connection's
+     teardown landed outside the window, and the window was not entered again until the run was long
+     over.  Ten alarms were triaged inside it.
+       window   10:07:37.455Z to 10:10:21.877Z, 164.42 s
+       ss -tan state established, sampled once a second for the whole window:
+         0 connections on 161 of 161 samples, maximum 0
+       /proc/net/dev across the window
+         eth0   rx 7,715 B / 37 packets      tx 2,333 B / 24 packets
+         lo       760 B / 8 packets each way
+       /proc/net/dev as edge_monitor.py itself read it, around setup + 10 s idle + the ten answers
+         eth0   rx 5,893 B / 31 packets      tx 1,987 B / 20 packets
+       and per answer: 7 of the 10 answer windows saw at least one byte on eth0.
+     Non-zero.  So every packet was captured and named.
+
+  2  EVERY PACKET, NAMED.  tcpdump -i eth0 -p (no promiscuous mode, so this is what the board's own
+     interface handled) ran across the window: 66 packets.
+       17  the board SENT
+       13  unicast addressed to the board
+       35  broadcast and multicast from other hosts, which any NIC on the segment receives
+     ALL SEVENTEEN THE BOARD SENT:
+        5  DNS to the LAN resolver 89.101.251.228 -- four of them A and AAAA for the board's own
+           hostname kria.dynamic.ziggo.nl, fired at window open + 0.018 s, which is the instant the
+           proof script ran its own snapshot commands and about twelve seconds BEFORE bitnet_kria
+           was started at all, so whichever of those commands asked for it, it cannot be inference;
+           and one AAAA for connectivity-check.ubuntu.com
+        4  ARP (who-has the gateway, and replies to the gateway asking for the board)
+        4  TCP to 2620:2d:4002:1::197 port 80 -- NetworkManager's periodic connectivity check: SYN,
+           ack, "GET / HTTP/1.1", ack.  Canonical answered "HTTP/1.1 204 No Content".
+        2  ICMP echo replies to the router pinging the board
+        1  IPv6 neighbour advertisement answering the router's solicitation
+        1  IGMP v3 membership report
+     Not one of the seventeen is the inference.  Two of them leave the LAN: a DNS lookup and
+     NetworkManager's connectivity check, both the operating system's own housekeeping, both on a
+     schedule that has nothing to do with the model.  The interface the answers would have used is
+     eth0 -- it and lo are the only interfaces on this board -- and what was counted is the whole of
+     /proc/net/dev's rx_bytes/tx_bytes/rx_packets/tx_packets for eth0, plus every packet tcpdump saw
+     on it.
+
+  3  THE DECISIVE ONE: THE INFERENCE HOLDS NO SOCKET.  Every open file descriptor of every process
+     in the chain, listed while it was answering:
+       bitnet_kria (this is the process that runs every matrix product in the fabric) -- 10 fds:
+         0 -> pipe          (stdin from the python parent)
+         1 -> pipe          (stdout to the python parent)
+         2 -> the log file
+         3 -> /dev/udmabuf0     4 -> /dev/udmabuf0
+         5 -> .../udmabuf0/sync_for_cpu
+         6 -> /dev/udmabuf1     7 -> /dev/udmabuf1
+         8 -> .../udmabuf1/sync_for_cpu
+         9 -> /dev/mem
+         NOT ONE SOCKET.  There is no descriptor through which it could reach a network.
+       python3 edge_monitor.py -- 5 fds: a stdin pipe, stdout and stderr both to the log file, and
+         the two pipes it talks to bitnet_kria through.  No socket.
+       sudo, the launcher -- 2 sockets, and both were resolved against the kernel's own tables:
+         inode 3919053 is in /proc/net/netlink, protocol 9 = NETLINK_AUDIT (sudo writing the audit
+         record), inode 3919054 is an unnamed local socketpair.  NEITHER appears in /proc/net/tcp,
+         /proc/net/tcp6, /proc/net/udp or /proc/net/udp6 -- the kernel's complete tables of IPv4 and
+         IPv6 sockets -- so neither can put a packet on a wire.
+     Forty process samples were taken two seconds apart across a run: 26 showed 0 sockets and 14
+     showed 2.  Every one of the 14 was the sudo launcher.  bitnet_kria and edge_monitor.py showed
+     0 sockets on every sample in which they appeared.
+     (The fd listing above is one process sampled in full and shows bitnet_kria holding 10; the
+     forty-sample census was a separate invocation and counted 11 or 12 fds for it, because that one
+     was logging to a file it also kept open.  The number that matters is the same in both: zero
+     sockets, on every sample of both.)
+
+  WHAT THE MAIN 53-ANSWER RUN'S OWN COUNTERS SAY, and why they are not the proof.  Across that run
+  eth0 moved 70,776 B in and 39,164 B out as the application itself bracketed it (net_before to
+  net_after in edge-run.json), and 72,416 B in / 42,024 B out over the slightly wider bracket of
+  edge-net-before.txt to edge-net-after.txt, which were taken from outside the application and so
+  also contain the launching session.  That is not zero and it is not claimed to be:
+  that run was launched over ssh and its completion was waited on, so a control connection existed
+  around it, and no tcpdump was taken over that window to attribute the bytes packet by packet.
+  That is exactly why a separate run was made with no session in existence at all, and it is the
+  one above that carries the claim.  Quoting the main run's counters as an offline proof would be
+  dishonest, so they are quoted here as what they are.
+
+  The weights are read once from the SD card into udmabuf0 at process start and the fabric streams
+  them from DDR thereafter; the tokenizer is a local file; the sensors are sysfs.  There is no step
+  in either job that has anywhere to go.
+
+POWER
+  idle, three independent measurements on the same board on the same day
+    3.8213 W   20 s, 393 samples, immediately before the fabric run
+    3.8463 W   15 s, 293 samples, immediately before the bitnet.cpp run
+    3.8456 W   15 s, 295 samples, immediately after the bitnet.cpp run
+  answering
+    fabric      5.4666 W mean, 6.490 W peak in any 50 ms sample, 79.547 J an answer
+    bitnet.cpp  5.1547 W mean over 3,108.9 s, 400.552 J an answer
+  the work itself, above idle
+    fabric      1.645 W, 23.94 J an answer
+    bitnet.cpp  1.309 W, 101.7 J an answer
+  The fabric draws MORE watts and uses FIVE TIMES FEWER JOULES, because it is finished 5.34x sooner.
+  PROJECTION (arithmetic on the measured numbers above, not a measured duty cycle): a gateway
+  triaging one alarm a minute would spend 79.5 J a minute on the fabric and 400.6 J a minute on the
+  A53s, and since one A53 answer takes 77.7 s, at one alarm every 78 s the A53s would never be idle.
+
+VERBATIM TRANSCRIPT, board, fourteen of the forty alarms
+--- c01 [clear] want mechanical/critical
+  > Alarm: MOTOR-03 bearing DE vibration 11.4 mm/s RMS, trip 7.1 mm/s, rising 0.4 mm/s per hour
+  {"category": "mechanical", "severity": "warning", "action": "Monitor the vibration and adjust the bearing maintenance schedule if necessary."}
+    strict json True, mechanical/warning (category OK, severity no), 15,198 ms, 265 prompt, 32 gen, 83.15 J at 5.47 W
+--- c07 [clear] want electrical/critical
+  > Alarm: MCC-04 feeder 12 earth leakage 38 mA, RCD trip level 30 mA, breaker opened
+  {"category": "electrical", "severity": "warning", "action": "Reopen the breaker and check for any live parts."}
+    strict json True, electrical/warning (category OK, severity no), 15,651 ms, 256 prompt, 30 gen, 85.03 J at 5.43 W
+    -- and "Reopen the breaker" is dangerous advice on an unresolved earth fault.
+--- c11 [clear] want thermal/critical
+  > Alarm: VFD-09 heatsink 92 C, derating starts 85 C, trip 100 C, ambient 38 C
+  {"category": "thermal", "severity": "warning", "action": "Monitor the VFD-09 and adjust derating settings to prevent overheating."}
+    strict json True, thermal/warning (category OK, severity no), 15,328 ms, 260 prompt, 34 gen, 83.70 J at 5.46 W
+--- c15 [clear] want sensor/critical
+  > Alarm: TT-115 loop current pinned at 4.00 mA for 47 minutes while the process moved 12 K
+  {"category": "none", "severity": "info", "action": "Notify the process control team about the pinning of the loop current."}
+    strict json True, none/info (category no, severity no), 14,783 ms, 257 prompt, 32 gen, 81.16 J at 5.49 W
+--- c17 [clear] want sensor/critical
+  > Alarm: ENC-4 lost 512 counts over one revolution, index pulse still present
+  {"category": "mechanical", "severity": "warning", "action": "Check for mechanical issues causing the loss of counts and investigate the index pulse."}
+    strict json True, mechanical/warning (category no, severity no), 14,786 ms, 249 prompt, 35 gen, 81.08 J at 5.48 W
+--- c19 [clear] want network/critical
+  > Alarm: SW-3 uplink eth0 down for 312 s, four downstream drops unreachable
+  {"category": "network", "severity": "warning", "action": "Check the network connection and upstream equipment."}
+    strict json True, network/warning (category OK, severity no), 13,781 ms, 251 prompt, 26 gen, 74.97 J at 5.44 W
+--- c22 [clear] want network/info
+  > Alarm: NTP synchronised, stratum 3, offset 1.8 ms, last step 6 days ago
+  {"category": "network", "severity": "info", "action": "Update the network time server and verify the synchronization."}
+    strict json True, network/info (category OK, severity OK), 14,218 ms, 257 prompt, 28 gen, 77.65 J at 5.46 W
+--- c23 [clear] want software/critical
+  > Alarm: PLC watchdog expired, CPU restarted into RUN after a 2.3 s outage
+  {"category": "none", "severity": "info", "action": "No action needed, PLC watchdog will reset automatically."}
+    strict json True, none/info (category no, severity no), 13,942 ms, 250 prompt, 28 gen, 76.02 J at 5.45 W
+    -- the worst answer of the forty: an unexplained 2.3 s loss of control dismissed as "no action needed".
+--- c24 [clear] want software/critical
+  > Alarm: Firmware slot B image CRC 0x7A21, expected 0x7A2F, boot fell back to slot A
+  {"category": "network", "severity": "warning", "action": "Check the network connection and verify the firmware image integrity."}
+    strict json True, network/warning (category no, severity no), 14,662 ms, 261 prompt, 29 gen, 79.79 J at 5.44 W
+--- c27 [clear] want none/info
+  > Alarm: Recipe BATCH-450 loaded, 214 parameters applied, checksum verified
+  {"category": "none", "severity": "info", "action": "No action needed, checksum verified."}
+    strict json True, none/info (category OK, severity OK), 13,403 ms, 247 prompt, 25 gen, 72.85 J at 5.44 W
+--- c30 [clear] want none/info
+  > Alarm: Automatic lubrication cycle finished, 14 points served, 0 faults
+  {"category": "mechanical", "severity": "info", "action": "No action needed, cycle completed successfully."}
+    strict json True, mechanical/info (category no, severity OK), 13,707 ms, 248 prompt, 28 gen, 74.81 J at 5.46 W
+--- a01 [AMBIG] want thermal/critical
+  > Alarm: Spindle coolant flow 4.1 L/min, minimum 6.0 L/min, spindle load 80 percent
+  {"category": "mechanical", "severity": "warning", "action": "Reduce spindle load to 80% to prevent overheating."}
+    strict json True, mechanical/warning (category no, severity no), 14,870 ms, 258 prompt, 32 gen, 81.16 J at 5.46 W
+    -- "reduce to 80%" when the line says the load already IS 80 percent.
+--- a06 [AMBIG] want sensor/warning
+  > Alarm: Cabinet ambient sensor reads 4 C while the room instrument reads 22 C
+  {"category": "sensor", "severity": "warning", "action": "Adjust the thermostat to 20 C to prevent overheating."}
+    strict json True, sensor/warning (category OK, severity OK), 14,157 ms, 249 prompt, 30 gen, 77.32 J at 5.46 W
+--- a09 [AMBIG] want mechanical/critical
+  > Alarm: Robot R2 axis 4 brake test failed, holding torque 68 percent of nominal
+  {"category": "mechanical", "severity": "warning", "action": "Perform a brake test on Robot R2 axis 4 to determine the cause of failure."}
+    strict json True, mechanical/warning (category OK, severity no), 15,225 ms, 251 prompt, 38 gen, 83.77 J at 5.50 W
+    -- it proposes the test that has just failed.
+
+VERBATIM TRANSCRIPT, board, the three self-reports
+--- self01, 18,435 ms, 63 generated ids, 3 sentence ends, 38 words, 103.316 J at 5.60 W
+  > Board sensor readings:
+  > Board power 4.25 W (837 mA at 5.05 V)
+  > Processor die temperature 29.9 C, second processor sensor 30.1 C
+  > FPGA fabric die temperature 27.6 C
+  > CPU core clocks 1333 1333 1333 1333 MHz on 4 cores
+  > Load average 0.17 1.10 1.24
+  > Memory 2216 MB free of 3911 MB
+  > FPGA configuration state: operating
+  > Uptime 3.2 days
+  > Report on the board.
+  The board is operating with a power consumption of 4.25 W, a processor die temperature of 29.9 C,
+  and an FPGA fabric die temperature of 27.6 C. The load average is 0.17, 1.10, and 1.24. Nothing
+  needs attention.
+--- self02, 20,960 ms, 82 generated ids, 4 sentence ends, 56 words, 118.865 J at 5.67 W
+  > Board sensor readings:
+  > Board power 3.84 W (760 mA at 5.05 V)
+  > Processor die temperature 30.1 C, second processor sensor 31.2 C
+  > FPGA fabric die temperature 28.3 C
+  > CPU core clocks 1333 1333 1333 1333 MHz on 4 cores
+  > Load average 0.87 1.20 1.26
+  > Memory 2215 MB free of 3911 MB
+  > FPGA configuration state: operating
+  > Uptime 3.2 days
+  > Report on the board.
+  The board is operating with a power consumption of 3.84 W, a processor die temperature of 30.1 C,
+  and an FPGA fabric die temperature of 28.3 C. The CPU core clocks are at 1333 MHz on 4 cores, and
+  the load average is 0.87. Memory is 2215 MB free out of 3911 MB. Nothing needs attention.
+--- self03, 19,027 ms, 66 generated ids, 3 sentence ends, 44 words, 106.921 J at 5.62 W
+  > Board sensor readings:
+  > Board power 3.82 W (757 mA at 5.05 V)
+  > Processor die temperature 30.9 C, second processor sensor 31.5 C
+  > FPGA fabric die temperature 28.8 C
+  > CPU core clocks 1333 1333 1333 1333 MHz on 4 cores
+  > Load average 1.45 1.31 1.30
+  > Memory 2215 MB free of 3911 MB
+  > FPGA configuration state: operating
+  > Uptime 3.2 days
+  > Report on the board.
+  The board is operating with a power consumption of 3.82 W, a processor die temperature of 30.9 C,
+  and an FPGA fabric die temperature of 28.8 C. The load average is 1.45, and memory is 2215 MB free
+  out of 3911 MB. Attention needed.
+  -- every reading it quotes is benign, and it says attention is needed without saying to what.
+
+WHAT THIS BOARD COULD AND COULD NOT BE USED FOR AT THE EDGE, on this evidence
+  IT COULD, today, as built:
+    - Emit machine-usable structured output with no server.  Forty of forty answers were strict JSON
+      with exactly the right keys and both fields inside their vocabularies, first try, greedy, and
+      the two baselines confirm the prompt rather than the board is what earns that.  A gateway
+      could parse and route these without a human.
+    - Sort alarms into the right SUBSYSTEM most of the time, at 14.5 s and 79.5 J an answer on a
+      5.5 W board with the network unplugged.  Mechanical 7/8, electrical 5/6, network 4/4.  As a
+      first-pass router -- "this is an electrical problem, page the electricians" -- it works.
+    - Do it faster and on a fifth of the energy of the same board's own CPUs, which is the whole
+      argument for putting the model in the fabric: 5.34x the speed at 5.04x fewer joules.
+    - Read its own sensors and quote them back accurately in English.  Every number in every
+      self-report was correct.
+    - Run with genuinely nothing leaving the device.  The inference process holds ten file
+      descriptors and not one of them is a socket.
+  IT COULD NOT, on this evidence:
+    - Be trusted with SEVERITY.  One "critical" in forty lines, and twelve of thirteen genuinely
+      critical faults downgraded to warning or info.  Anything downstream that acts on severity --
+      paging, shutdown interlocks, escalation -- would sleep through an earth fault that had already
+      opened a breaker.  This is the model, not the board: the RTX 4080 downgrades the same twelve.
+    - Be trusted to catch INSTRUMENT faults.  Sensor category 1 of 6 over all forty lines and 0 of
+      the 4 clear ones.  A transmitter frozen at the 4.00 mA rail for 47 minutes while the process
+      moved 12 K was returned as none/info by all three ways.
+    - Have its ACTION field executed.  Three of the fourteen transcribed answers give advice that is
+      wrong or dangerous: reopen a breaker on an unresolved earth fault, reduce a load to the value
+      it already has, run the brake test that just failed.  The action sentence is fine as a hint to
+      a technician who reads it; it is not an instruction to a machine.
+    - Be used where an answer must arrive quickly.  14.5 s an answer, three quarters of it prompt
+      eval, means about four alarms a minute.  A burst of alarms from one plant trip would queue.
+    - Produce a fixed-length reply.  Two sentences were asked for and three came back, on every way
+      of running the model.
+  THE HONEST SUMMARY.  As an offline structured-output front end -- take a line of telemetry, return
+  a parseable object, name the subsystem, keep the plant's data on the plant -- this board does the
+  job at 5.5 W with nothing on the wire.  As a judge of how urgent something is, it does not, and no
+  amount of fabric fixes that: the same weights on a 4080 are exactly as wrong.  What would fix it
+  is a bigger model or severity rules in the prompt, and the second was deliberately not done here
+  because it would have been tuning the prompt to this file's own answer key.
+
+METHOD NOTES, so the raw files can be checked against this one without surprise
+  1  edge-run.json's OWN summary block does not match the headline, and should not.  It reports 50
+     answers and "clear 40" with category 0.725 and severity 0.600, because edge_monitor.py folds
+     the ten answers of the --saving pass back in and counts every non-ambiguous answer, repeats
+     included, as clear.  The headline in this file is score_edge.py's, which scores each of the
+     forty alarms once, excludes every mode-tagged (shared/fresh) row, and applies one scoring rule
+     to all three ways.  Those are the numbers to quote: 19/30, 16/30, 12/30.
+  2  Generated-id counts for the self-reports are quoted with the end-of-turn token excluded (63,
+     82, 66) so they line up with what the RTX 4080 reports; edge-run.json stores the raw counts
+     (64, 83, 67).  The triage counts have no such adjustment.
+  3  bitnet.cpp's prompt is exactly one token longer on all forty lines because llama.cpp prepends
+     a BOS the other two ways do not.  That is the only difference between the three inputs.
+  4  quality_bitnetcpp.py gained two additive fields (t0, t1) so each llama-cli invocation's INA260
+     window could be integrated exactly as edge_monitor integrates the board's.  No behaviour of
+     the baseline changed.
+  5  The offline-proof window was run three times.  The first two were contaminated by a wait
+     connection opened inside the window itself, which is exactly the thing the window is supposed
+     to exclude; both were discarded and the clean third run is the one reported here.  Nothing
+     from the discarded runs is quoted.
+  6  bitnet.cpp's 5.1547 W is the trapezoid mean over its whole 3,108.9 s window.  Dividing its
+     total 16,022.1 J by the 3,108.1 s it spent answering gives 5.1549 W, and the plain arithmetic
+     mean of the 60,822 in-window samples gives 5.1544 W; the three agree to four figures.
+  7  Every number in this file is measured.  The one projection is marked as such in POWER.
+
+FILES
+  board/edge_monitor.py                                    the application (unchanged this pass)
+  board/offline-proof.sh                                   the no-session proof run + tcpdump window
+  board/socket-census.sh, board/socket-detail.sh           the file-descriptor evidence
+  board/edge-cpp-baseline.sh                               the bitnet.cpp run with the INA260 around it
+  board/research/ternary/bitnet/edge_alarms.json           the 40 alarms and their ground truth
+  board/research/ternary/bitnet/make_edge_prompts.py       one prompt file for all three ways
+  board/research/ternary/bitnet/score_edge.py              one scoring rule for all three ways
+  board/research/ternary/bitnet/edge_confusion.py          the confusion tables
+  board/research/ternary/bitnet/edge_report.py             transcript, power and net out of a run
+  board/research/ternary/bitnet/compare_selftest.py        board self-reports against the GPU's
+  board/research/ternary/bitnet/classify_pkts.py           names every captured packet
+  board/research/ternary/bitnet/cpp_joules.py              joules an answer for bitnet.cpp
+  board/research/ternary/bitnet/edge_prompts.json          the 40 triage prompts, one file
+  board/research/ternary/bitnet/edge_selftest_prompts.json the 3 self-report turns, verbatim
+  board/research/ternary/bitnet/edge-run.json              the fabric run, every timing and window
+  board/research/ternary/bitnet/edge-cpp-answers.json      bitnet.cpp, with each invocation's stdout
+  board/research/ternary/bitnet/edge-cpp-answers-power.json  the same, with joules an answer
+  board/research/ternary/bitnet/edge-cpp.window            the absolute start and stop of that run
+    (edge-run.log, edge-proof.log, edge-cpp.log and edge-cpp-power.log are the raw transcripts and
+     the 61,410 raw INA260 samples; .gitignore line 86 already excludes *.log from this directory,
+     and nothing here depends on them -- every transcript is in edge-run.json and edge-proof.json,
+     and every joule integrated from that power log is in edge-cpp-answers-power.json)
+  board/research/ternary/bitnet/edge-hf-answers.json       the RTX 4080, 40 triage answers
+  board/research/ternary/bitnet/edge-hf-selftest.json      the RTX 4080, the 3 self-report turns
+  board/research/ternary/bitnet/edge-proof.json            the no-session run's own counters
+  board/research/ternary/bitnet/edge-proof-net.txt         /proc/net/dev and ss around the window
+  board/research/ternary/bitnet/edge-proof-conns.txt       the connection count, once a second
+  board/research/ternary/bitnet/edge-proof-pkts.txt        all 66 packets, decoded
+  board/research/ternary/bitnet/edge-fd-detail.txt         every fd of every process in the chain,
+                                                           and the kernel socket tables to resolve
+                                                           the launcher's two against
+  board/research/ternary/bitnet/edge-fd.txt                the socket count sampled through a run
+  board/research/ternary/bitnet/edge-net-before.txt        /proc/net/dev either side of the main
+  board/research/ternary/bitnet/edge-net-after.txt         53-answer run (not the offline proof)
+  board/research/ternary/bitnet/edge-scores.json           the three ways scored side by side
+
+COMMANDS
+  the fabric run (on the board, detached, transcript to a local file so nothing goes down the wire)
+    ssh ubuntu@kria 'cd /home/ubuntu/bitnet-kria && setsid nohup sh -c "echo oracle-kria | sudo -S \
+      env PYTHONPATH=/home/ubuntu/.local/lib/python3.10/site-packages python3 edge_monitor.py \
+      --no-sudo --job both --selftests 3 --saving 5 --idle 20 --json-out edge-run.json \
+      > edge-run.log 2>&1" </dev/null >/dev/null 2>&1 & echo launched'
+  the offline proof (launch, then do not connect until it is over)
+    ssh ubuntu@kria 'cd /home/ubuntu/bitnet-kria; setsid nohup ./offline-proof.sh 10 45 \
+      </dev/null >/dev/null 2>&1 & echo launched'
+  the file-descriptor evidence
+    ssh ubuntu@kria 'cd /home/ubuntu/bitnet-kria && ./socket-detail.sh'
+  the bitnet.cpp baseline with the INA260 around it
+    ssh ubuntu@kria 'cd /home/ubuntu/bitnet-kria; setsid nohup ./edge-cpp-baseline.sh \
+      </dev/null >/dev/null 2>&1 & echo launched'
+  the RTX 4080 baseline (on the PC)
+    python make_edge_prompts.py ../../../edge_monitor.py edge_alarms.json edge_prompts.json
+    python quality_hf.py edge_prompts.json edge-hf-answers.json
+    python make_edge_prompts.py ../../../edge_monitor.py edge-run.json \
+      edge_selftest_prompts.json --selftest
+    python quality_hf.py edge_selftest_prompts.json edge-hf-selftest.json
+  the scoring
+    python cpp_joules.py edge-cpp-answers.json edge-cpp-power.log edge-cpp.window \
+      --out edge-cpp-answers-power.json
+    python score_edge.py --alarms edge_alarms.json --board edge-run.json \
+      --cpp edge-cpp-answers-power.json --gpu edge-hf-answers.json --out edge-scores.json
+    python edge_confusion.py edge-scores.json
+    python compare_selftest.py edge-run.json edge-hf-selftest.json
+    python classify_pkts.py edge-proof-pkts.txt --v4 192.168.178.224 \
+      --v6 2001:1c0f:60c:6e00:95cd:782b:8250:61ec
+    python edge_report.py edge-run.json --transcript 12

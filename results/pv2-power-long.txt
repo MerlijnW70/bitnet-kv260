@@ -1,0 +1,19 @@
+  locked 331 MB of head weights, scales and norms into RAM in 0.20 s
+  /dev/udmabuf0 phys 0x0038300000 size 545259520: model3.bin 417546240 bytes read in 0.87 s (482 MB/s)
+  /dev/udmabuf1 phys 0x0058b00000 size 8388608: activations, sums and glue beats need 987136 bytes
+  /dev/udmabuf2 phys 0x0059300000 size 83886080: head3_t.bin 65667072 bytes read in 0.14 s (480 MB/s), 32064 neurons of 32 beats an engine; the head sums take 513024 bytes of /dev/udmabuf1 at 0x0f1000; shortlist K = 256
+  engines at 0x00a0000000 + i*0x10000, DMAs at 0x00a0040000; glue GPIO 0x00a0080000 params 0x00a0090000 DMA 0x00a00a0000
+  KV cache float32, context 512: 79 MB; 4 threads
+  a layer streams 13918208 weight bytes (base3, 80 weights a beat): qkv 3840 neurons of 32 beats, o 2560, gate+up 13824, down 2560 of 87 (a quarter an engine)
+  a token streams 417546240 weight bytes over 30 layers; the prompt runs 4 positions a group
+  setup 1.29 s
+done 256 18313.2
+prompt 25 tokens 1067.5 ms (23.42 tok/s), generated 256 17245.7 ms (14.84 tok/s)
+per forward over 281 (ms): engines qkv 4.110, o 3.458, gate+up 16.616, down 7.288 (31.472 together); activation loads 0.848; glue A 3.437 B 3.418; shift scan 3.808; sums out 0.493; attention 11.555; norms, quant, RoPE and residuals 3.461; waiting on the side thread 0.009; forward total 60.076. side thread busy 3.348 ms a forward (beats and the FFN scale, off the critical path). head 5.429 ms a call over 256 calls
+setup 1.298 s, prompt 1.072 s, generation 17.239 s, whole run 19.847 s
+1 idle-before   196 samples  power mean 3.812 W  min 3.780 W  max 4.140 W   mean 755 mA at 5.051 V
+2 setup          25 samples  power mean 4.439 W  min 4.020 W  max 4.560 W   mean 879 mA at 5.050 V
+3 prompt         21 samples  power mean 5.249 W  min 4.340 W  max 6.410 W   mean 1035 mA at 5.050 V
+4 generation    328 samples  power mean 6.159 W  min 4.640 W  max 6.980 W   mean 1221 mA at 5.050 V
+5 tail            5 samples  power mean 4.090 W  min 4.040 W  max 4.160 W   mean 809 mA at 5.051 V
+6 idle-after    197 samples  power mean 3.808 W  min 3.780 W  max 3.900 W   mean 754 mA at 5.051 V

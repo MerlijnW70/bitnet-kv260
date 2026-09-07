@@ -1,0 +1,198 @@
+ref_model.py (numpy, float32 on the A53's side, exact int32 matvecs where the engines run) against
+transformers 5.3.0 (torch 2.6.0+cu124, NVIDIA GeForce RTX 4080, attn eager) on microsoft/bitnet-b1.58-2B-4T
+prompt (25 tokens): 'What is the capital of France, and what river runs through it? Explain in three sentences.'
+chat text: 'User: What is the capital of France, and what river runs through it? Explain in three sentences.<|eot_id|>Assistant: '
+token ids: [1502, 25, 3639, 374, 279, 6864, 315, 9822, 11, 323, 1148, 15140, 8640, 1555, 433, 30, 83017, 304, 2380, 23719, 13, 128009, 72803, 25, 220]
+reference: head int8, KV cache f32, eps 1e-05, rope_theta 500000.0, weights float32 from 04c3b9ad9361b824064a1f25ea60a8be9599b127 in 4 s
+HF self-checks: attention rebuilt from its own q,k,v max |diff| 0.2131, down_proj from its int8 input max |diff| 0
+
+COMMANDS (from the repository root, the model read out of the local Hugging Face cache)
+  python board/research/ternary/bitnet/hf_dump.py --out .
+  python board/research/ternary/bitnet/ref_model.py --check --hf . --report model-agreement.txt --dump refdump --new 32   (run inside board/research/ternary/bitnet)
+  python board/research/ternary/bitnet/ref_model.py --self-test
+  python board/research/ternary/bitnet/ref_model.py --verify board/research/ternary/bitnet/refdump
+
+SELF-TEST
+  ffn_glue == reference.ffn_int's glue on 6 small layers (corners included)
+  float32 BLAS matvec == int64 matvec, 4 x [257, 6912] ternary times int8
+  absmax_int8 puts the largest activation on 127 with scale 127/max|x|
+  round_bf16 keeps 8 mantissa bits
+  max|y| from the integers vs the float path: relative departure 1.544e-09 (Kc 1.94801e-05); the glue's q8 vs quantising the float y: 0.9905 identical, 1.0000 within one
+  the int8 head's float32 accumulation lands on integers: max |acc - round(acc)| 0 (so the reference's logits are the runtime's int32 sums exactly)
+
+the 25-token prompt through the reference in 5.2 s (207 ms a token, numpy on the PC)
+
+HIDDEN STATE COSINE, reference vs HF, over all 25 positions (layer 0 is the embedding output, layer l+1 the residual stream after layer l)
+  layer   min cosine    mean cosine   max |diff|   ref |h| max
+      0   1.00000000   1.00000000            0       5.312
+      1   0.99933436   0.99957270        9.183       519.4
+      2   0.99933279   0.99962600        19.36        1289
+      3   0.99938064   0.99961685        501.6        7082
+      4   0.99917008   0.99957553        623.1   1.545e+04
+      5   0.99908667   0.99954054        713.8   2.373e+04
+      6   0.99917327   0.99956055        890.2   3.613e+04
+      7   0.99912661   0.99954103         1140   4.859e+04
+      8   0.99913163   0.99953609         1111   5.944e+04
+      9   0.99919970   0.99951875         1147   6.662e+04
+     10   0.99923967   0.99953944         1231   7.133e+04
+     11   0.99899129   0.99951438         1299   7.402e+04
+     12   0.99880754   0.99952071         1357   7.785e+04
+     13   0.99874721   0.99951074         1471   8.106e+04
+     14   0.99878715   0.99953145         1524   8.386e+04
+     15   0.99866640   0.99952225         1544   8.689e+04
+     16   0.99861628   0.99953060         1692   8.927e+04
+     17   0.99854948   0.99952496         1584    9.16e+04
+     18   0.99854075   0.99953266         1581   9.493e+04
+     19   0.99839599   0.99954903         1724   9.758e+04
+     20   0.99852719   0.99956477         1744   1.016e+05
+     21   0.99862808   0.99957251         1640   1.035e+05
+     22   0.99867204   0.99957845         1733   1.064e+05
+     23   0.99864428   0.99959337         1877   1.096e+05
+     24   0.99870523   0.99959727         1738   1.122e+05
+     25   0.99869345   0.99960162         1642   1.149e+05
+     26   0.99875007   0.99961627         1687   1.169e+05
+     27   0.99871153   0.99962400         1707   1.209e+05
+     28   0.99864608   0.99961973         2292   1.265e+05
+     29   0.99865493   0.99964314         3384   1.391e+05
+     30   0.99809207   0.99953316         4166   1.461e+05
+  worst layer cosine 0.99809207 at layer 30
+
+FINAL NORM cosine over all 25 positions: min 0.99419739 mean 0.99865539
+LOGITS (int8 head) over all 25 positions: cosine min 0.99538172 mean 0.99934717; top-1 agreement 0.9200 (23/25); top-5 set overlap 0.9520; top-1 inside HF's top-5 1.0000
+    position 15 (token 30) differs: ref 4815, HF 720; HF's top two logits 18.0000 and 18.0000, a margin of 0.0000; HF's logit for the reference's pick 18.0000
+    position 17 (token 304) differs: ref 7872, HF 4382; HF's top two logits 23.5000 and 23.5000, a margin of 0.0000; HF's logit for the reference's pick 23.5000
+LOGITS (bf16 head) over all 25 positions: cosine min 0.99512391 mean 0.99948370; top-1 agreement 0.9200 (23/25); top-5 set overlap 0.9520; top-1 inside HF's top-5 1.0000
+    position 15 (token 30) differs: ref 4815, HF 720; HF's top two logits 18.0000 and 18.0000, a margin of 0.0000; HF's logit for the reference's pick 18.0000
+    position 17 (token 304) differs: ref 7872, HF 4382; HF's top two logits 23.5000 and 23.5000, a margin of 0.0000; HF's logit for the reference's pick 23.5000
+the int8 head vs the float head on HF's OWN final hidden states: argmax equal 24/25; vs HF's own logits 24/25 (int8) and 23/25 (float)
+
+LAYER 0, STAGE BY STAGE, the first 8 positions (the reference's integers vs HF's floats)
+  pos  attn_in      q        k        v      attn_out  attn_sub    o       mlp_in      g        u        h      q8 same  q8 <=1     d
+    0 0.999997 0.999988 0.999993 0.999995 0.999995 0.999982 0.999957 0.999975 0.999951 0.999914 0.999864  0.9695  0.9996  0.999509
+    1 0.999997 0.999979 0.999988 0.999992 0.999987 0.999957 0.999945 0.999967 0.999966 0.999936 0.999892  0.9745  1.0000  0.999781
+    2 0.999997 0.999984 0.999990 0.999993 0.999990 0.999956 0.999914 0.999937 0.999948 0.999908 0.999603  0.9198  0.9993  0.999578
+    3 0.999997 0.999984 0.999989 0.999992 0.999989 0.999957 0.999932 0.999938 0.999916 0.999917 0.999780  0.9822  1.0000  0.999549
+    4 0.999997 0.999986 0.999990 0.999996 0.999993 0.999962 0.999964 0.999956 0.999944 0.999943 0.999715  0.9770  1.0000  0.999340
+    5 0.999997 0.999987 0.999991 0.999994 0.999993 0.999931 0.999961 0.999976 0.999964 0.999938 0.999892  0.9656  1.0000  0.999705
+    6 0.999997 0.999986 0.999991 0.999995 0.999972 0.999949 0.999956 0.999940 0.999950 0.999924 0.999414  0.9727  0.9997  0.999578
+    7 0.999997 0.999982 0.999990 0.999995 0.999980 0.999906 0.999954 0.999975 0.999975 0.999942 0.999904  0.9324  0.9993  0.999782
+  worst over those positions: attn_in 0.999997, q 0.999979, k 0.999988, v 0.999992, attn_out 0.999972, attn_sub 0.999906, o 0.999914, mlp_in 0.999937, g 0.999916, u 0.999908, h 0.999414, d 0.999340, q8_same 0.919850, q8_within1 0.999277
+
+  the FFN scale bookkeeping, position by position (max|y| from the integers vs the float path,
+  and the reference's own float FFN output against HF's down_proj output)
+   pos 0: s_g 0 s_u 0 kg 12 (s_S,s_T,s_V) 13,13,10 hmax 30034 m 138; max|y| int 13.744167 float 13.744167 HF 13.562500; rel vs float 2.264e-08, vs HF 1.339e-02; ffn out cos 0.99950872
+   pos 1: s_g 0 s_u 0 kg 12 (s_S,s_T,s_V) 15,14,8 hmax 17219 m 241; max|y| int 2.436241 float 2.436241 HF 2.437500; rel vs float 1.252e-07, vs HF 5.167e-04; ffn out cos 0.99978070
+   pos 2: s_g 0 s_u 0 kg 12 (s_S,s_T,s_V) 15,15,7 hmax 16989 m 244; max|y| int 1.658028 float 1.658028 HF 1.671875; rel vs float 1.670e-07, vs HF 8.283e-03; ffn out cos 0.99957780
+   pos 3: s_g 0 s_u 0 kg 12 (s_S,s_T,s_V) 15,15,7 hmax 29939 m 139; max|y| int 2.272423 float 2.272423 HF 2.265625; rel vs float 9.698e-09, vs HF 3.001e-03; ffn out cos 0.99954884
+   pos 4: s_g 1 s_u 1 kg 12 (s_S,s_T,s_V) 14,14,7 hmax 26819 m 155; max|y| int 2.270984 float 2.270984 HF 2.281250; rel vs float 1.015e-07, vs HF 4.500e-03; ffn out cos 0.99933983
+   pos 5: s_g 0 s_u 0 kg 12 (s_S,s_T,s_V) 13,14,10 hmax 22011 m 189; max|y| int 8.105091 float 8.105091 HF 8.062500; rel vs float 1.160e-08, vs HF 5.283e-03; ffn out cos 0.99970486
+   pos 6: s_g 1 s_u 1 kg 12 (s_S,s_T,s_V) 14,14,5 hmax 30915 m 134; max|y| int 0.804014 float 0.804014 HF 0.796875; rel vs float 9.064e-08, vs HF 8.959e-03; ffn out cos 0.99957786
+   pos 7: s_g 0 s_u 0 kg 12 (s_S,s_T,s_V) 14,14,9 hmax 21617 m 192; max|y| int 5.773976 float 5.773976 HF 5.687500; rel vs float 6.011e-08, vs HF 1.520e-02; ffn out cos 0.99978227
+
+GREEDY GENERATION, 32 tokens asked, HF gave 32 before EOS, comparing 32
+  HF : [791, 6864, 315, 9822, 374, 12366, 13, 12366, 374, 31183, 3235, 279, 14286, 315, 279, 1369, 483, 11188, 13, 578, 1369, 483, 11188, 374, 832, 315, 279, 22807, 36617, 304, 9822, 11]
+  ref: [791, 6864, 315, 9822, 374, 12366, 13, 12366, 374, 31183, 3235, 279, 14286, 315, 279, 1369, 483, 11188, 13, 578, 1369, 483, 11188, 374, 832, 315, 279, 22807, 36617, 304, 9822, 11]
+  32/32 tokens identical, no difference
+  HF text : 'The capital of France is Paris. Paris is situated along the banks of the Seine River. The Seine River is one of the longest rivers in France,'
+  ref text: 'The capital of France is Paris. Paris is situated along the banks of the Seine River. The Seine River is one of the longest rivers in France,'
+  the tokenizers library on tokenizer.json with the chat text built by hand reproduces HF's prompt ids: True (25 ids)
+  (7.5 s for 32 reference tokens, 13.1 s including the prompt)
+  with a bf16 KV cache instead of float32: 32/32 identical to HF, no difference; against the float32-cache reference: identical
+  the same two references against each other over the 8 dumped positions and all 31 stages: worst cosine 0.99912473, largest |diff| relative to that stage's own max |h| 2.398e-02 (the tolerance a bf16 cache costs a --stage-check)
+
+STAGE DUMPS for the runtime in refdump: stages.bin (12405344 bytes), ref_dump.json, and one .npy an array, 32 arrays over prompt positions [0, 1, 2, 3, 4, 5, 6, 7]
+  stages.bin: magic char[8] "REFSTG\x01\x00"; uint32 count; uint32 data_start; then count entries of
+  72 bytes {char name[32]; uint32 dtype (0 float32, 1 int32, 2 int16, 3 int8); uint32 ndim; uint32 dims[4];
+  uint64 offset; uint64 nbytes}; the arrays follow from data_start (4096-aligned), each at data_start +
+  offset, 64-byte aligned, little endian, C order. board/refstages.h reads it; board/refstages_dump.c prints it.
+  tokens         int32    (8,)
+  hidden         float32  (31, 8, 2560)
+  l0_attn_in     float32  (8, 2560)
+  l0_xq          int8     (8, 2560)
+  l0_sx          float32  (8,)
+  l0_qi          int32    (8, 2560)
+  l0_ki          int32    (8, 640)
+  l0_vi          int32    (8, 640)
+  l0_q           float32  (8, 20, 128)
+  l0_k           float32  (8, 5, 128)
+  l0_v           float32  (8, 5, 128)
+  l0_attn_out    float32  (8, 2560)
+  l0_attn_sub    float32  (8, 2560)
+  l0_aq          int8     (8, 2560)
+  l0_sa          float32  (8,)
+  l0_oi          int32    (8, 2560)
+  l0_o           float32  (8, 2560)
+  l0_mlp_in      float32  (8, 2560)
+  l0_x2q         int8     (8, 2560)
+  l0_sx2         float32  (8,)
+  l0_g           int32    (8, 6912)
+  l0_u           int32    (8, 6912)
+  l0_h           int16    (8, 6912)
+  l0_q8          int8     (8, 6912)
+  l0_d           int32    (8, 2560)
+  l0_shifts      int32    (8, 8)
+  l0_absmax_y    float32  (8,)
+  l0_ffn         float32  (8, 2560)
+  final_norm     float32  (8, 2560)
+  logits         float32  (8, 128256)
+  logits_bf16    float32  (8, 128256)
+  argmax         int32    (8,)
+  read back through the binary's own rules: all 32 arrays identical to their .npy
+
+SUMMARY
+  hidden state cosine vs HF over 25 positions and 30 layers: worst 0.998092 (layer 30), best layer's worst 0.999381
+  logits (int8 head): cosine min 0.995382, top-1 23/25, top-5 overlap 0.9520, top-1 inside HF's top-5 1.0000
+  greedy generation: 32/32 tokens identical to HF's
+  layer 0 worst stage cosine over 8 positions: attn_in 0.999997, q 0.999979, k 0.999988, v 0.999992, attn_out 0.999972, attn_sub 0.999906, o 0.999914, mlp_in 0.999937, g 0.999916, u 0.999908, h 0.999414, d 0.999340
+  the FFN's max|y| from the integers vs the float path: worst relative departure 1.670e-07
+
+THE STAGE DUMPS ON THE BOARD (appended by hand; everything above is written by ref_model.py --check)
+Two dumps, the same 8 prompt positions, differing only in the KV cache the reference kept:
+  board/research/ternary/bitnet/refdump/       --cache-dtype f32   md5 c293d1a671fbf250d824583e9e6ad2d9
+  board/research/ternary/bitnet/refdump_bf16/  --cache-dtype bf16  md5 5db0e3c63553292f9f9457e23d1854b5
+written by
+  python ref_model.py --dump refdump_bf16 --cache-dtype bf16 --dump-tokens 8 --tokens 1502,25,...,220
+and copied to /home/ubuntu/bitnet-kria/refdump/ and /home/ubuntu/bitnet-kria/refdump_bf16/ with scp,
+the md5s equal on both sides. board/refstages.h is the C reader, board/refstages_dump.c the test
+program; on the board, verbatim:
+
+$ ssh ubuntu@kria 'cd /home/ubuntu/bitnet-kria/refdump && gcc -O3 -Wall -Wextra -std=c11 -o refstages_dump refstages_dump.c && ./refstages_dump stages.bin'
+stages.bin: 32 arrays, data at 4096, 12405344 bytes
+tokens         int32    [8] 8 values at +0: 1502 25 3639 374 279 6864
+hidden         float32  [31, 8, 2560] 634880 values at +64: 0.2792969 0.265625 0.7734375 1.023438 -0.1210938 0.3300781
+l0_attn_in     float32  [8, 2560] 20480 values at +2539584: 0.006022914 0.005888312 0.01842837 0.03472549 -0.001944804 0.007466422
+l0_xq          int8     [8, 2560] 20480 values at +2621504: 12 11 35 66 -4 14
+l0_sx          float32  [8] 8 values at +2641984: 1913.952 1662.95 1994.887 1653.392 1537.415 1782.615
+l0_qi          int32    [8, 2560] 20480 values at +2642048: -4350 8756 5316 4657 -2544 4107
+l0_ki          int32    [8, 640] 5120 values at +2723968: -4051 484 2861 751 1572 5389
+l0_vi          int32    [8, 640] 5120 values at +2744448: 326 425 1969 1283 -1138 516
+l0_q           float32  [8, 20, 128] 20480 values at +2764928: -2.769955 5.57557 3.385077 2.965444 -1.619946 2.61522
+l0_k           float32  [8, 5, 128] 5120 values at +2846848: -3.803199 0.4543935 2.685991 0.705061 1.47584 5.059352
+l0_v           float32  [8, 5, 128] 5120 values at +2867328: 0.3912225 0.5100294 2.362936 1.539689 -1.365679 0.6192356
+l0_attn_out    float32  [8, 2560] 20480 values at +2887808: 0.3912225 0.5100294 2.362936 1.539689 -1.365679 0.6192356
+l0_attn_sub    float32  [8, 2560] 20480 values at +2969728: 0.001003388 0.001694299 0.007214693 0.004663484 -0.004086396 0.001936073
+l0_aq          int8     [8, 2560] 20480 values at +3051648: 2 4 17 11 -9 4
+l0_sa          float32  [8] 8 values at +3072128: 2315.759 2274.548 1805.983 1730.65 2421.684 2708.472
+l0_oi          int32    [8, 2560] 20480 values at +3072192: 356 -360 -413 -371 2018 -1789
+l0_o           float32  [8, 2560] 20480 values at +3154112: 0.1483248 -0.1499913 -0.1720734 -0.1545744 0.8407848 -0.7453736
+l0_mlp_in      float32  [8, 2560] 20480 values at +3236032: 0.6481066 0.1742363 0.8955349 1.538883 0.9956439 -0.622106
+l0_x2q         int8     [8, 2560] 20480 values at +3317952: 15 4 21 36 23 -15
+l0_sx2         float32  [8] 8 values at +3338432: 23.58327 27.43616 27.28575 28.35135 30.01165 28.45726
+l0_g           int32    [8, 6912] 55296 values at +3338496: -1249 3510 -3480 247 951 -3534
+l0_u           int32    [8, 6912] 55296 values at +3559680: 1041 621 55 -1157 -211 -578
+l0_h           int16    [8, 6912] 55296 values at +3780864: 0 540 0 0 -25 0
+l0_q8          int8     [8, 6912] 55296 values at +3891456: 0 2 0 0 0 0
+l0_d           int32    [8, 2560] 20480 values at +3946752: -400 174 250 279 -579 305
+l0_shifts      int32    [8, 8] 64 values at +4028672: 0 0 12 13 13 10
+l0_absmax_y    float32  [8] 8 values at +4028928: 13.74417 2.436241 1.658028 2.272423 2.270984 8.105091
+l0_ffn         float32  [8, 2560] 20480 values at +4028992: -93.34129 40.60346 58.33831 65.10555 -135.1115 71.17274
+final_norm     float32  [8, 2560] 20480 values at +4110912: 0.003763019 0.05037238 -0.007181499 -0.1915793 -0.07344079 -0.04639108
+logits         float32  [8, 128256] 1026048 values at +4192832: -0.02690064 0.8134865 -0.3305865 -1.203474 -1.948362 -3.89683
+logits_bf16    float32  [8, 128256] 1026048 values at +8297024: -0.05198705 0.8326901 -0.2763608 -1.175025 -1.923131 -3.816314
+argmax         int32    [8] 8 values at +12401216: 25 720 374 279 6811 315
+check_i32 l0_g row 1 against itself: -1 (-1 is agreement)
+check_f32 hidden row 1 against itself, zero tolerance: -1
+stage-check l0_g[0 + 3]: got 248, reference 247
+check_i32 with element 3 bent by one: 3
+stage-check hidden[0 + 5]: got 0.3400781, reference 0.3300781, |diff| 0.01 > 0.001003
+check_f32 with element 5 moved by 0.01, atol 1e-3: 5

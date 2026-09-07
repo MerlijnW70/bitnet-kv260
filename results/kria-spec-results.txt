@@ -1,0 +1,492 @@
+BitNet b1.58 2B4T on the Kria KV260: THE STALL IS FOUND AND GONE, SPECULATION IS MEASURED AND REFUSED.
+This pass had two jobs.  The first was to explain the shift-scan stall that kria-speed2-results.txt left
+open as "not diagnosed" - the wart that made a battery figure and a bench figure disagree by more than
+noise.  It is explained, it is fixed in board/bitnet_kria.c, and the fix touches no arithmetic.  The
+second was to decide whether speculative decoding pays here.  It was studied on the PC against the
+board's own 2097 generated ids and the answer is no, by a factor of three to ten, so it was not built.
+This file is the PROVE pass for both: everything below was measured on 2026-09-07 between 07:43 and
+08:09 UTC in ONE session, on one board, with the before and the after taken back to back, and every id
+compared in place.  13,113 id-against-id comparisons, every one identical.
+
+  THE HEADLINE, the whole 31-prompt battery, 953 prompt and 2097 generated ids, one long-lived process a
+  max_new group, --head fabric --context 1024 --threads 4:
+                                        prompt tok/s   generation tok/s   a generated token
+    quiet board, the pre-fix binary        28.60            16.33             61.254 ms
+    quiet board, the fixed binary          29.03            16.13             61.983 ms
+    a quarter of an A53 taken, pre-fix     21.55            12.03             83.105 ms
+    a quarter of an A53 taken, fixed       27.01            15.27             65.489 ms
+  ON A QUIET BOARD THE FIX IS WORTH NOTHING, and that is the honest headline: 16.33 against 16.13 tok/s
+  is the board's own run-to-run noise and the fixed binary is on the slow side of it tonight.  WHEN
+  ANYTHING ELSE ON THE BOARD WANTS A CORE the fix is worth +26.9% of the generation rate and +25.3% of
+  the prompt rate, and with a whole A53 taken it turns a 1039 ms shift scan into a 12 ms one - 0.82 tok/s
+  into 12.21.  The stall was never in our arithmetic, and no id moved in any of it.
+
+  THE FIVE BENCH PROMPTS, three times each, 267 prompt and 876 generated ids, context 512:
+                                          prompt tok/s   generation tok/s   a generated token
+    the pre-pass baseline (kria-speed2)      28.78            16.78             59.599 ms
+    the pre-fix binary, tonight              29.36            16.95             59.005 ms
+    the fixed binary, tonight                30.02            16.98             58.879 ms
+  The bench set never carried the stall in any run, before or after, so it measures only that the board
+  is where kria-speed2-results.txt left it.  It is: 16.98 against 16.78 tok/s, two hours apart on the
+  same night, with the same bitstream and the same weights untouched between them.
+
+SETUP (spec-state.txt, taken at 07:43:41 UTC before a single measurement)
+  bitstream   /home/ubuntu/ffn/ffn.bit.bin  md5 1f7e4fcc5ee4c905ebcfb57f60fe9675  (the base-3 fabric)
+              pl0_ref 249999998 Hz, the overlay live
+  model       model3.bin  md5 dbb41a46744c176d31b0ce79bd82f166   417,546,240 B, base 3
+              head3_t.bin md5 97ba6c13749370a39adf42e821578e12    65,667,072 B
+              manifest.json md5 45cabaf7c91635df93069195d11202d0
+  binaries    ./bitnet_kria         md5 ba6542305049a8700e948ea4d1261d34   THE FIXED RUNTIME
+              ./bitnet_kria_before  md5 a465231b02e7979a5dae152672d33450   the pre-fix runtime
+              bitnet_kria.c         md5 6595394ea807a87e00f2f563cbb20917 = board/bitnet_kria.c in the repo
+  THE BINARY UNDER TEST IS THE REPO'S SOURCE.  bitnet_kria.c was rebuilt in this session under a fresh
+  name and came out md5 ba6542305049a8700e948ea4d1261d34 - byte-identical to the shipped ./bitnet_kria -
+  and objdump -d of the two differs on four lines, all of them the file-name header:
+      2c2
+      < bitnet_kria:     file format elf64-littleaarch64
+      ---
+      > bitnet_kria_prove:     file format elf64-littleaarch64
+      objdump diff lines: 4
+  board       4 x A53, governor userspace, all four pinned at 1333333 kHz; PS die 26.6 C, remote 29.2,
+              PL 26.3; up 3 days, load average 0.40 at the start; polkit restarted first (this board's
+              known polkitd spin), then 25 s of quiet before the first number.
+  compiler    gcc -O3 -Wall -Wextra -std=c11 -march=armv8-a+crc -ffp-contract=off, -lm -lpthread
+  the noise   ./noise 250 1000 noise.stop  takes a quarter of an A53 a second; ./noise 1000 1000 takes
+              one outright.  It is a plain spinner, nothing to do with the runtime.
+
+  MEASUREMENT HYGIENE, and it matters here more than usual: an ssh login into this board costs about a
+  core-second of polkit/dbus/logind churn and lands as a stall in whatever is running.  Each of the three
+  blocks was launched detached with one connection, and that same connection then slept on a marker file;
+  each block begins with a sleep long enough to swallow its own launch churn.  ONE EXCEPTION, stated
+  because it is the sort of thing this file exists to catch: the connection waiting on block 3 timed out
+  and closed at about 08:05:45, inside the pre-fix disturbed battery (08:02:11 to roughly 08:06).  A
+  disconnect costs less than a login and that battery is 174 s of generation with a mean scan of 18.8 ms
+  across all 31 prompts, so it cannot account for the gap being measured - but it is the one moment in
+  this session when the board was touched while a number was being taken, and the number it touched is
+  the pre-fix column, the one already losing.
+  Nothing on the board was rebuilt, swapped or reloaded between the before and the after of any pair; no
+  bitstream was loaded and no Vivado was run.
+
+1. THE STALL: WHAT IT WAS, AND WHY THE FIX IS FREE
+  The open item in kria-speed2-results.txt: "sometimes a run's shift scan costs three to eight times its
+  2.7 ms norm and the whole forward wears it", hitting q20_forloop at 20.257 ms a forward, q22_nl_uitleg
+  at 7.993 and q11_wordproblem at 7.850, and moving from run to run.
+
+  IT IS NOT OUR ARITHMETIC.  In every traced forward, stalled or clean, the scan's three passes take
+  0.8-1.1 ms per thread.  That number never moves.  It is not the data (the same prompt stalls in some
+  repeats and not others), not the batch (it appears at --prompt-batch 1 and 4), not base 3 (it appears
+  in the two-bit runs), not page faults (0-2 minor, 0 major in a stalled forward), not cgroup throttling
+  (no cpu.max anywhere, nr_throttled 0) and not DVFS or heat (all four A53s pinned, die 27-30 C).
+
+  IT IS THE BARRIERS.  (This paragraph's numbers were taken earlier in this pass with the -DPOOL_TRACE
+  build, stall-trace.txt and stall-cause.txt; everything else in this file is from tonight's one session.)
+  Built with -DPOOL_TRACE, the worst forward measured took 1109.9 ms of wall, of
+  which the scan was 1043.0 ms; the four threads spent 966.9 / 1028.3 / 1012.4 / 961.7 ms IN THE SCAN'S
+  BARRIERS and 0.9 ms each in its passes, while the scheduler said they waited 256.9 / 15.6 / 495.1 /
+  328.2 ms on run queues and /proc/stat showed 4330 of 4440 core-ms busy with only 3224 of them ours.
+  The shift scan is the only ARM work that runs on all four A53s behind barriers - 30 layers x 6 barriers
+  = 180 barrier waits a forward - and every one of them spun on `yield` and never gave up its core.  One
+  foreign runnable thread takes a core, one scan thread goes off-CPU, and the other three burn a
+  scheduler slice at each of 180 barriers.  A /proc sampler named the consumer: polkitd, up to 110 ms in
+  a 100 ms sample, with dbus-daemon, NetworkManager, systemd, systemd-logind and gnome-shell behind it -
+  the churn an ssh login sets off.  In the quiet stretches the small stalls line up with rcu_sched,
+  ksoftirqd, kworker/flush, systemd-oomd and fancontrol: 10 ms of foreign CPU bought 10-30 ms of scan.
+
+  THE FIX, board/bitnet_kria.c only, no .v and no .tcl touched, no arithmetic touched:
+    (a) prep_barrier spins BAR_SPIN = 10000 (about 30 us; a normal barrier wait measures 0.5 us) and then
+        calls sched_yield instead of spinning for ever.
+    (b) ffn_prep_worker: every thread now takes the four slice maxima itself and computes its own shift,
+        instead of thread 0 computing it while three threads wait at a barrier for the answer.  Each
+        stage keeps its own row of mx so a thread running ahead cannot overwrite a word another must
+        still read.  Six barriers a layer become three and the serial stretch between each pair is gone.
+  WHY IT CANNOT CHANGE A NUMBER: a maximum over the same four words is the same word in every thread, and
+  stage_shift of that word is the same shift, so every slice is scaled by exactly the shift the old code
+  used.  The change is who computes it, not what is computed.  The battery and the bench prove it below.
+
+  THE THREE NAMED PROMPTS, measured tonight, one process a line, --head fabric --context 1024 --threads 4
+  (spec-three-quiet.txt, spec-three-noise.txt, spec-three-spin.txt):
+                                          shift scan ms a forward      generation tok/s
+    prompt              disturbance      pre-fix      fixed          pre-fix    fixed
+    q20_forloop         quiet             2.960       2.325           16.04     16.17
+    q22_nl_uitleg       quiet             2.551       2.431           16.01     15.66
+    q11_wordproblem     quiet             2.319       2.413           16.67     16.55
+    q20_forloop         0.25 A53 taken   20.788       4.587           12.09     15.25
+    q22_nl_uitleg       0.25 A53 taken   21.569       4.609           11.60     15.06
+    q11_wordproblem     0.25 A53 taken   18.880       4.757           12.75     15.58
+    q20_forloop         one A53 taken  1039.379      12.118            0.82     12.21
+  The 20.257 ms that kria-speed2-results.txt reported for q20_forloop is reproduced to within 3% (20.788,
+  with a quarter of an A53 taken) and removed (4.587).  It is reproduced on demand: the wart that landed
+  at random on three prompts in the last pass can now be summoned on any prompt by taking a core, which
+  is the strongest evidence that the diagnosis is the right one.
+  Under a quarter of a core taken, the fixed runtime's whole forward costs 56.894 ms
+  against its quiet 53.390 - +3.5 ms, about the fair share of the 0.25 core taken from a machine on which
+  we run roughly 2.9 - while the pre-fix runtime pays 72.913 against 54.180, five times that.
+
+2. THE STUDY: SPECULATIVE DECODING, MEASURED AND REFUSED (speculation-study.txt, spec_study.py,
+   spec_shallow.py; run on the PC, the board untouched)
+  Exact speculation cannot change an id: a drafted token is accepted only when it equals the argmax the
+  model would have produced there, so the emitted sequence is the greedy sequence whatever the drafter
+  says.  What is not free is the verification, which costs a batched forward whether the drafts were
+  right or wrong.  So the only open question was the acceptance, and it was measured on the board's own
+  2097 generated ids.
+
+  THE COST MODEL, from the runtime's own --timing lines at --prompt-batch 1, 2, 3, 4 (b3v2-batchscan.txt;
+  the timers reconcile with wall clock to within 1%).  T(B) = F(B) + 4.107 + 5.983 x B, calibrated so
+  that T(1) = 59.599 ms, the measured cost of a plain generated token:
+    B   weight stream a pass   F(B) whole forward   T(B) round   ms a position   break-even mean accepted
+    1        32.72 ms                49.51 ms          59.6 ms       59.60              0.000
+    2        33.42                   77.37             93.4          46.72              0.568
+    3        52.04                  116.80            138.9          46.28              1.330
+    4        52.02                  133.16            161.2          40.30              1.705
+  Above two vectors the engines lose 59% of the amortisation they were built for: one pass carrying three
+  or four vectors costs 52.0 ms, not 32.7.  B is capped at 4 by the fabric; B=5 needs a second stream and
+  the break-even jumps to 4.02 tokens a round.  CEILING with a free, always-right drafter (a PROJECTION
+  and an upper bound no drafter can reach): B=4 gives 40.30 ms a token, 24.82 tok/s, 1.479x.
+
+  (a) CONTEXT DRAFTING (prompt lookup), chained over the real ids, 28 (n, k) settings, drafts capped at 3.
+      THE MEAN ACCEPTED LENGTH AND THE WASTED WORK, the battery, 2097 generated ids:
+       n  k   rounds  drafted   draft positions   accepted   WASTED   waste   mean accepted   ms a token
+       1  1     1877      851               851        228      623   73.2%          0.121        67.08
+       1  3     1780      754              2262        326     1936   85.6%          0.183        87.08
+       2  1     1939      302               302        159      143   47.4%          0.082        59.98
+       2  3     1873      236               708        226      482   68.1%          0.121        64.67
+       3  1     1995      170               170        103       67   39.4%          0.052        59.44
+       3  3     1954      129               387        145      242   62.5%          0.074        61.78
+       4  1     2026      104               104         72       32   30.8%          0.036        59.26
+       4  3     1994       72               216        104      112   51.9%          0.052        60.16
+      The best of the 28 is n=4 k=1 at 59.26 ms a token against the plain 59.599 - +0.6%, inside the
+      board's own run-to-run noise (the same bench set read 16.78 and 16.81 tok/s twenty minutes apart,
+      and 16.98 tonight).  Every other setting loses, some 30%.  The mean accepted length over all rounds
+      is 0.036 to 0.183 where break-even needs 0.568 at B=2 and 1.705 at B=4: short by 3x to 10x.
+      Raising n makes the rare drafts better (0.268 -> 1.444 accepted when a draft exists) and rarer
+      (45.3% -> 3.6% of rounds); the product never clears the bar.  THE WASTED WORK is the right-hand
+      side of that trade: between 31% and 86% of every drafted position is thrown away, and at the two
+      settings whose mean accepted is highest - n=1, k=1 and k=3 - it is 73.2% and 85.6%.  A drafted
+      position that is rejected still cost its share of the batched forward.
+      THE ACCEPTED-PREFIX DISTRIBUTION at n=2 k=3 is bimodal, which is the repetition signature:
+        a=0 93.6%   a=1 2.8%   a=2 1.4%   a=3 2.1%
+      WHICH PROMPTS SPECULATION WOULD HAVE HELPED, at n=2 k=3 (mean accepted over all rounds of that
+      prompt; break-even at B=4 is 1.705):
+        q22_nl_uitleg   0.851   drafted on 41.4% of rounds   the only one over the B=2 bar of 0.568,
+                                                             and still half of the B=4 bar
+        q11_wordproblem 0.342   29.1%
+        q16_summary     0.238   27.0%
+        q10_syllogism   0.159   20.7%
+        q23_long        0.143   21.4%
+        q07_divadd      0.048 | q03_crc32 0.048 | q08_prime91 0.047 | q04_fpga 0.040 | q26_unicode 0.010
+        NOTHING AT ALL: q05_sky, q12_sortsize, q13_onesentence, q14_threeitems, q15_yesno, q17_haiku,
+                        q25_emptyish, bench:haiku, bench:sky - nine of the 31.
+      AND THE ONE PROMPT THAT NEARLY PAYS IS THE ONE THAT IS BROKEN.  q22_nl_uitleg clears its bar
+      because the model has fallen into a repetition loop, saying "Zie de zinnen in een boek of een
+      document die een schuifregister is" four times.  Prompt lookup drafts a degenerate output well.
+      The five bench prompts are worse than the battery (best -0.3%) because none of the five loops.
+
+  (b) SHALLOW-PASS DRAFTING (the first L of 30 layers, same final norm and head), teacher-forced on the
+      RTX 4080 over the board's own 2097 ids:
+        L      10      15      20      25      29      30 (control, the whole model in bf16)
+        agree  2.43%   7.01%   18.41%  49.74%  77.78%  97.47%
+      The bf16 caveat is closed: the truncated model agrees with ITS OWN 30-layer argmax at the same rate
+      (L=20: 0.1822 against 0.1841), so the low acceptance is the truncation, not the arithmetic, and a
+      board-native truncated pass would land on the same number.
+      THE ARITHMETIC KILLS IT BEFORE THE ACCEPTANCE DOES.  A drafted token costs L/30 of the per-layer
+      work plus a WHOLE head, because a draft still needs an argmax over 128,256 logits: 23.47 ms at
+      L=10, 41.54 at L=20.  At L=20 even 100% acceptance reads 67.49 ms a token, 11.7% SLOWER than not
+      speculating.  Perfect acceptance breaks even only below about L=11, where measured acceptance is
+      under 4.4%.  There is no L where both hold.  Best real setting: L=20 at 114.51 ms a token, -48%.
+
+  (c) WHETHER IT PAYS - PROJECTED TOKENS A SECOND at the measured acceptance.  Every ms-a-token here is a
+      PROJECTION, because the speculation path does not exist; only the acceptance numbers are measured.
+        not speculating (MEASURED, tonight)             58.88 ms   16.98 tok/s
+        context drafting n=4 k=1 (best of 28)           59.26 ms   16.88 tok/s   +0.6% on the study's base
+        context drafting n=2 k=3                        64.67 ms   15.46 tok/s   -7.8%
+        shallow L=20, its best k                       114.51 ms    8.73 tok/s  -48.0%
+      WHAT WOULD HAVE TO CHANGE (projections from the measured stage costs): batching the glue like the
+      engines takes break-even to 1.245 of 3; removing the batch-3/4 stream penalty takes it to 1.381;
+      both together 0.921; both plus attention sharing its K/V tiles 0.680 (a per-token acceptance of
+      42%).  The best drafter measured delivers 0.183.  What is actually needed is a SEPARATE small draft
+      model - about a tenth of the weights, so a draft costs a tenth of a stream - trained to agree with
+      this one.  None exists for BitNet b1.58 2B4T, and building one is a training job, not a runtime job.
+
+  THE VERDICT: DO NOT BUILD IT, and it was not built.  No --speculate flag exists; no line of the token
+  loop was written for it.  Point 3 of the plan was conditional on the study and the study said no.
+
+3. WHAT WAS BUILT, AND WHAT WAS NOT
+  BUILT:      the stall fix in board/bitnet_kria.c (prep_barrier's bounded spin, and ffn_prep_worker
+              taking its own maxima), plus a guarded -DPOOL_TRACE diagnostic block of about 330 lines
+              that compiles to nothing without the define.  Proof that it is inert: before the barrier
+              change, the edited source built WITHOUT -DPOOL_TRACE was byte-identical (md5
+              a465231b02e7979a5dae152672d33450) to the shipped pre-fix binary.
+  NOT BUILT:  speculative decoding.  The study measured what it would have delivered instead.
+  MEASURED IN ITS PLACE, and this is point 4 of the plan: the ARM cost of a batched forward.
+
+4. THE ARM COST OF A BATCHED FORWARD - what a verification round would actually have paid
+  A verification round is a batched forward over B positions, which is exactly the code the prompt phase
+  runs.  The batch scan's per-position timers are MEASURED; the per-call split below is DERIVED from them
+  by taking 57 x the printed value as the run total, subtracting the four single-position generation
+  forwards, and dividing by the number of prompt calls (53, 27, 18, 14).  Milliseconds of ONE call:
+    stage                            B=1       B=2       B=3       B=4    B=4 against 4 x B=1
+    the shift scan                 2.317     6.837     8.573     8.658           0.934x
+    norms, quant, RoPE, residuals   3.250     6.760    10.234    13.472           1.036x
+    attention                      2.707     4.723     6.897     8.627           0.797x
+    the sums out of the buffer     0.288     4.511     7.748    10.699           9.287x
+    the two glue passes            6.848    13.442    20.145    25.925           0.946x
+    the engines (weight stream)   32.721    33.421    52.044    52.016           0.397x
+    the activation loads           0.879     0.997     1.122     1.223           0.348x
+    the whole forward             49.509    77.374   116.798   133.159           0.672x
+    ARM work in one batched call   8.562    22.830    33.453    41.456           1.210x
+  READ IT LIKE THIS.  Only the weight stream amortises (0.397x at B=4, and even that is spoiled above two
+  vectors).  Attention DOES share its K and V tiles and comes in sublinear at 0.797x - the grouped kernel
+  does what it was built for.  The norms, the quantisation, the RoPE and the residuals are exactly linear
+  (1.036x), as four independent pieces of work must be.  The glue does not batch at all (0.946x).  And
+  the sums coming out of the DMA buffer are NINE TIMES what four single positions cost - 10.699 ms a call
+  against 1.152 - which is the single worst line in the table and a real cost of the batched path.
+  Take the sums-out stage away and the ARM work of a batched call would be 30.757 ms against 33.096 for
+  four singles, 0.929x - a genuine 7% saving from attention's tile sharing.  As it stands the ARM work of
+  a batch of four costs 1.210x what four single forwards cost.  THE FOUR-THREAD POOL DOES NOT RESCUE THIS:
+  the pieces are already dispatched across it, and what is left is arithmetic that grows with B.
+  This is the arithmetic behind the verdict.  A batch of four saves 19.7 ms of weight stream a position
+  (32.721 against 52.016/4 = 13.004) and hands 9.5 ms of it straight back per round in sums-out overhead
+  it would not have paid as four singles (10.699 against 4 x 0.288), on top of 25.9 ms a round of glue
+  that will not batch and 13.5 of norms that cannot.
+
+5. THE VERBATIM RUN LINES
+  the fixed runtime, quiet, q20_forloop, 24 prompt and 160 generated, context 1024, fabric head:
+prompt 24 tokens 799.3 ms (30.02 tok/s), generated 160 9894.9 ms (16.17 tok/s)
+per forward over 184 (ms): engines qkv 3.988, o 3.235, gate+up 16.031, down 7.088 (30.342 together); activation loads 0.814; glue A 3.435 B 3.417; shift scan 2.325; sums out 0.607; attention 7.584; norms, quant, RoPE and residuals 3.373; waiting on the side thread 0.008; forward total 53.390. side thread busy 3.327 ms a forward (beats and the FFN scale, off the critical path). head 5.393 ms a call over 160 calls
+  the pre-fix runtime, same prompt, a quarter of an A53 taken:
+prompt 24 tokens 1059.7 ms (22.65 tok/s), generated 160 13231.3 ms (12.09 tok/s)
+per forward over 184 (ms): engines qkv 3.990, o 3.233, gate+up 16.005, down 7.089 (30.317 together); activation loads 0.812; glue A 3.438 B 3.418; shift scan 20.788; sums out 0.599; attention 7.744; norms, quant, RoPE and residuals 3.509; waiting on the side thread 0.008; forward total 72.913. side thread busy 3.325 ms a forward (beats and the FFN scale, off the critical path). head 5.423 ms a call over 160 calls
+  the fixed runtime, same prompt, same quarter A53 taken:
+prompt 24 tokens 861.3 ms (27.87 tok/s), generated 160 10490.0 ms (15.25 tok/s)
+per forward over 184 (ms): engines qkv 3.984, o 3.217, gate+up 15.659, down 7.086 (29.946 together); activation loads 0.812; glue A 3.434 B 3.417; shift scan 4.587; sums out 0.605; attention 9.318; norms, quant, RoPE and residuals 3.812; waiting on the side thread 0.008; forward total 56.894. side thread busy 3.330 ms a forward (beats and the FFN scale, off the critical path). head 5.472 ms a call over 160 calls
+  the pre-fix runtime, same prompt, one A53 taken outright - the stall caught in full:
+prompt 24 tokens 9127.6 ms (2.63 tok/s), generated 160 194538.9 ms (0.82 tok/s)
+per forward over 184 (ms): engines qkv 4.288, o 3.237, gate+up 15.287, down 7.091 (29.903 together); activation loads 0.811; glue A 3.457 B 3.416; shift scan 1039.379; sums out 0.621; attention 11.963; norms, quant, RoPE and residuals 7.380; waiting on the side thread 0.010; forward total 1101.003. side thread busy 3.321 ms a forward (beats and the FFN scale, off the critical path). head 6.681 ms a call over 160 calls
+  the fixed runtime, same prompt, one A53 taken outright:
+prompt 24 tokens 1112.7 ms (21.57 tok/s), generated 160 13100.3 ms (12.21 tok/s)
+per forward over 184 (ms): engines qkv 3.980, o 3.189, gate+up 14.488, down 7.081 (28.739 together); activation loads 0.811; glue A 3.438 B 3.416; shift scan 12.118; sums out 0.609; attention 14.526; norms, quant, RoPE and residuals 5.302; waiting on the side thread 0.010; forward total 72.213. side thread busy 3.305 ms a forward (beats and the FFN scale, off the critical path). head 5.733 ms a call over 160 calls
+  the fixed runtime, the longest bench prompt (shiftreg, 16 prompt and 128 generated, context 512):
+prompt 16 tokens 535.7 ms (29.87 tok/s), generated 128 7735.2 ms (16.55 tok/s)
+per forward over 144 (ms): engines qkv 4.033, o 3.250, gate+up 16.198, down 7.168 (30.649 together); activation loads 0.824; glue A 3.434 B 3.417; shift scan 2.341; sums out 0.561; attention 6.143; norms, quant, RoPE and residuals 3.374; waiting on the side thread 0.025; forward total 52.463. side thread busy 3.336 ms a forward (beats and the FFN scale, off the critical path). head 5.389 ms a call over 128 calls
+  the head's own stages, the same run:
+head stages (ms a call over 128 calls): stage 1 ternary stream 4.120, its activation load 0.007, sync and top-256 1.044, stage 2 exact rescore 0.196, head total 5.378
+
+6. NUMBERS, PROMPT BY PROMPT
+  The battery, generation tokens a second and the shift scan a forward, four columns taken in one
+  session: the two quiet batteries and the two with a quarter of an A53 taken away.  The prompts are in
+  order of how much they generate.  pv2 is the battery of the previous pass, kept for one reason: it is
+  the run in which the stall was caught, and its three stalled prompts are visible in its scan column.
+                             gen |  pv2, 2 h before | quiet, pre-fix | quiet, fixed  | 0.25 A53, pre-fix | 0.25 A53, fixed
+    prompt                   ids | tok/s     scan   | tok/s   scan   | tok/s   scan  | tok/s     scan    | tok/s    scan
+    battery:q23_long         256 | 14.33    2.764   | 14.41   2.846  | 14.20   2.519 | 10.57    22.706   | 13.08    4.800
+    battery:q20_forloop      160 | 11.42   20.257 * | 15.58   3.016  | 15.73   2.436 | 11.77    21.860   | 14.80    4.830
+    battery:q22_nl_uitleg    160 | 14.07    7.993 * | 15.56   2.685  | 15.54   2.385 | 11.83    21.437   | 14.95    4.577
+    battery:q04_fpga         156 | 16.04    2.677   | 16.46   2.521  | 15.54   4.394 | 11.88    21.642   | 14.90    4.882
+    bench:shiftreg           128 | 16.47    2.557   | 16.05   2.845  | 16.34   2.646 | 12.10    21.199   | 15.42    4.652
+    battery:q19_reverse      114 | 16.17    2.458   | 16.32   2.834  | 16.20   2.667 | 11.85    20.878   | 15.79    4.684
+    battery:q11_wordproblem  106 | 13.94    7.850 * | 16.53   2.407  | 16.56   2.194 | 11.84    20.247   | 15.61    4.494
+    battery:q26_unicode      105 | 16.02    2.399   | 16.56   2.575  | 16.21   2.373 | 11.84    21.062   | 15.43    4.611
+    battery:q10_syllogism     95 | 16.66    2.743   | 16.64   2.717  | 16.54   2.471 | 12.72    18.777   | 15.56    4.857
+    battery:q08_prime91       90 | 16.31    2.858   | 17.01   2.288  | 16.39   2.559 | 12.14    21.474   | 15.67    4.889
+    battery:q21_nl_hoofdstad  83 | 17.25    2.765   | 17.23   2.672  | 17.09   2.620 | 13.22    18.897   | 16.30    4.132
+    bench:crc32               77 | 16.18    2.284   | 17.13   2.324  | 17.03   2.481 | 12.49    20.703   | 15.74    4.662
+    battery:q16_summary       77 | 15.07    2.544   | 14.78   2.630  | 14.88   2.126 | 10.85    18.341   | 13.79    3.935
+    battery:q03_crc32         65 | 17.04    2.947   | 17.22   2.288  | 14.46   4.877 | 12.99    17.096   | 15.58    4.696
+    bench:sky                 58 | 16.46    3.323   | 17.70   3.466  | 16.75   2.229 | 12.26    19.484   | 15.81    4.855
+    battery:q18_shiftreg_ch   57 | 16.26    2.281   | 16.32   2.358  | 17.49   2.218 | 12.79    18.766   | 15.76    4.388
+    battery:q05_sky           46 | 17.84    2.399   | 17.74   2.929  | 17.96   2.082 | 13.26    16.576   | 16.74    4.638
+    battery:q07_divadd        44 | 16.76    2.298   | 17.12   3.616  | 17.95   2.034 | 12.28    18.760   | 16.65    4.470
+    battery:q09_seq           36 | 17.89    2.539   | 17.87   3.034  | 17.90   2.144 | 13.04    16.676   | 16.93    3.967
+    battery:q13_onesentence   28 | 18.29    3.718   | 18.28   2.717  | 18.37   1.952 | 14.10    15.310   | 17.20    4.358
+    battery:q25_emptyish      24 | 18.67    3.072   | 18.80   2.768  | 18.75   2.138 | 13.57    22.118   | 17.76    4.030
+    bench:haiku               21 | 19.08    2.038   | 18.86   3.108  | 19.03   2.085 | 15.09    16.800   | 17.91    4.827
+    battery:q17_haiku         21 | 18.74    2.746   | 18.72   2.007  | 18.64   2.194 | 13.05    19.835   | 17.30    3.945
+    battery:q24_determinism   20 | 17.34    2.790   | 18.75   1.988  | 18.81   1.955 | 12.28    19.291   | 17.05    3.897
+    battery:q14_threeitems    19 | 17.09    2.305   | 17.92   2.324  | 18.66   1.889 | 13.91    18.202   | 17.66    3.699
+    battery:q12_sortsize      12 | 17.85    2.002   | 19.21   2.594  | 19.28   2.070 | 13.23    13.964   | 17.64    3.881
+    battery:q02_hamlet        11 | 19.82    2.955   | 19.51   2.064  | 19.39   2.085 | 13.63    19.254   | 19.78    3.224
+    battery:q06_mul            9 | 19.90    1.981   | 20.00   2.228  | 20.08   2.048 | 12.00    16.439   | 19.93    3.584
+    battery:q01_france         8 | 20.37    2.846   | 20.49   3.008  | 20.04   2.119 | 19.73    10.899   | 17.28    3.840
+    bench:france               8 | 20.80    1.896   | 20.70   1.933  | 20.78   1.885 | 12.67    14.217   | 20.73    4.189
+    battery:q15_yesno          3 | 25.88    2.862   | 25.81   2.754  | 25.93   2.253 | 25.72    19.372   | 25.76    3.491
+    * the three prompts kria-speed2-results.txt named as stalled.
+    WHOLE BATTERY   953 prompt and 2097 generated ids
+      pv2, 2 h before           28.71 / 15.44 tok/s   64.753 ms a token   scan mean 3.521, max 20.257
+      quiet, pre-fix            28.60 / 16.33         61.254              scan mean 2.630, max  3.616
+      quiet, fixed              29.03 / 16.13         61.983              scan mean 2.391, max  4.877
+      0.25 A53 taken, pre-fix   21.55 / 12.03         83.105              scan mean 18.783, max 22.706
+      0.25 A53 taken, fixed     27.01 / 15.27         65.489              scan mean 4.322, max  4.889
+
+  WHICH PROMPTS GAIN AND WHICH DO NOT, plainly:
+    ON A QUIET BOARD, NONE.  The quiet before-and-after columns cross each other constantly - the fixed
+    binary is ahead on 16 of the 31 prompts and behind on 15 - and the battery totals (16.33 against
+    16.13) put it slightly behind.  There was nothing to fix on a quiet board and the numbers say so.
+    The spread runs -16.0% (q03_crc32) to +7.2% (q18_shiftreg_child), and the two worst are themselves
+    stall events: q03_crc32 at 14.46 against 17.22 has a 4.877 ms scan, q04_fpga at 15.54 against 16.46
+    has 4.394, against a battery median near 2.4.  That is the fix working rather than failing - after it
+    a foreign core-steal costs a few milliseconds instead of tens, so it can still be seen in a per-prompt
+    column but it can no longer own a run.  Note that the pre-fix binary's quiet battery caught no stall
+    at all this time (its worst scan was 3.616): the wart lands at random and a quiet board may go a
+    whole battery without it, which is exactly why it went undiagnosed for two passes.
+    WITH A QUARTER OF AN A53 TAKEN, ALMOST EVERY PROMPT GAINS.  30 of 31 are faster with the fix, 29 of
+    them by more than 10% and 27 by more than 20%, the best +66.1%; only q01_france goes the other way
+    (-12.4%) and it generates 8 ids, where one scheduling event owns the average.  The scan column is the
+    whole story and it has no exceptions at all: 10.9-22.7 ms a forward before, 3.2-4.9 after, lower on
+    31 of 31 prompts.
+    AND THE PROMPTS THE STUDY SAYS SPECULATION WOULD HAVE HELPED ARE A DIFFERENT SET ENTIRELY - q22, q11,
+    q16, q10, q23 - because that list is a list of prompts whose answers repeat themselves.  Nine
+    prompts would have gained nothing at all from speculation.  Neither list is the other.
+
+7. PROOF THAT NO ID CHANGED
+  Every comparison is id by id, in place; a differing id would be named with its prompt and its position.
+  None was.  All eight comparisons were made in this one session (spec-compare.txt, spec-compare-noise.txt):
+    the battery, the fixed binary        vs pv2-ids-fabric.json   31 prompts, 2097 ids   ALL IDENTICAL
+    the battery, the pre-fix binary      vs pv2-ids-fabric.json   31 prompts, 2097 ids   ALL IDENTICAL
+    the battery, pre-fix vs fixed, both tonight                   31 prompts, 2097 ids   ALL IDENTICAL
+    the disturbed battery, pre-fix       vs pv2-ids-fabric.json   31 prompts, 2097 ids   ALL IDENTICAL
+    the disturbed battery, fixed         vs pv2-ids-fabric.json   31 prompts, 2097 ids   ALL IDENTICAL
+    the bench prompts, the fixed binary  vs pv2-bench.json        15 runs,     876 ids   ALL IDENTICAL
+    the bench prompts, the pre-fix       vs pv2-bench.json        15 runs,     876 ids   ALL IDENTICAL
+    the bench prompts, pre-fix vs fixed, both tonight             15 runs,     876 ids   ALL IDENTICAL
+    ------------------------------------------------------------------------------------------------
+    13,113 generated ids compared against the protected baselines and against each other: every one same.
+  THE TWO DISTURBED BATTERIES ARE THE INTERESTING ONES.  They were run with a spinner eating a quarter of
+  an A53 throughout - the condition under which the pre-fix runtime's scan runs at 18.8 ms a forward
+  instead of 2.6, and the same class of condition that at a whole core makes it 1039 ms - and they still
+  produce the same 2097 ids as a quiet run, on both binaries.  The stall was always a timing
+  fault and never a numerical one; the fix does not change that and the ids prove it from both sides.
+  THE STAGE CHECK, the fixed binary, 8 positions and 30 of 30 layers (spec-stagecheck.txt, rc 0):
+    every integer stage exact - l0_x2q, l0_g, l0_u, l0_shifts, l0_h, l0_q8, l0_d all "differ 0 exact"
+    every float stage above its cosine floor - l0_ffn cosine 1.000000000 with max|diff| 0
+    hidden cosine layer by layer 0:1.000000 5:1.000000 10:0.999900 15:0.999828 20:0.999827 25:0.999859
+      30:0.999897; worst cosine 0.999812304 at layer 13
+    logits cosine 0.999891269; top-1 argmax 5380, reference 5380, same; two-stage fabric argmax 5380 and
+      exact head 5380, same.
+  AND THE BINARY IS THE SOURCE: bitnet_kria.c rebuilt in this session is md5-identical to the binary that
+  produced every number above, and objdump-identical but for its own file name.
+
+8. POWER (board/power-bitnet.sh with board/ina260-sample.py at 50 ms; the INA260 sees the whole board.
+   The same sixteen-id question and 80 generated tokens under each binary, back to back, quiet board.)
+                                     pre-fix binary     fixed binary     pv2 shipped (2 h before)
+    idle, this bitstream loaded         3.816 W            3.819 W            3.808 W
+    prompt                              5.185 W            5.337 W            5.148 W
+    generation                          6.330 W            6.254 W            6.206 W
+    generation seconds                  4.690              4.703              4.911
+    generation tok/s                   17.06              17.01              16.29
+    joules a generated token            0.3711             0.3677             0.3810
+    joules over idle                    0.1474             0.1431             0.1472
+  The seconds are the sampler's own marks; the runtimes' --timing lines for the same two runs read
+  4695.8 ms (17.04 tok/s) and 4708.7 ms (16.99), which is the agreement to expect between a wall-clock
+  mark and an internal accumulator.  The joules are derived: watts x seconds / 80.
+  THE FIX COSTS NOTHING AND SAVES NOTHING ON A QUIET BOARD: 0.3677 against 0.3711 J a token is under 1%
+  and inside the sampler's own spread.  That is the expected answer - it changes no arithmetic and moves
+  no byte - and the reason to state it is that a barrier that yields instead of spinning could in
+  principle have cost wake-up latency, and it does not.
+  A LONGER GENERATION on the fixed runtime (25 prompt ids, 256 generated, context 512):
+    prompt      5.267 W over  0.861 s,  25 tokens = 29.03 tok/s, 0.181 J a token
+    generation  6.177 W over 17.008 s, 256 tokens = 15.05 tok/s, 0.410 J a token, 0.157 J over idle
+    (pv2 shipped, the same run two hours earlier: 6.159 W over 17.239 s, 14.85 tok/s, 0.415 J a token)
+  WHAT IS NOT MEASURED HERE: power under the disturbance.  The spinner is itself an A53 burning current,
+  so a watt reading in that condition measures the spinner, not the runtime, and no such number is given.
+
+9. THE NEW CEILING, AND THE NEXT LEVER
+  Nothing in this pass moved the ceiling.  The token is where kria-speed2-results.txt left it -
+  58.879 ms and 16.98 tok/s on the bench prompts, against 59.599 and 16.78 - and the difference is noise.
+  What changed is that the floor under a disturbed board rose from 12.03 to 15.27 tok/s on the battery,
+  and that the reason a battery figure and a bench figure disagreed by more than noise is now known and
+  gone.  Of a 59 ms generated token the fabric still holds about 80%: the engines about 30.6 ms of weight
+  stream, the glue 6.85, the head 5.39 (4.12 of it its own ternary stream); the A53s hold the rest -
+  attention 6.1 at 144 positions and 11.7 at 281, norms and quantisation 3.37, the shift scan 2.34, the
+  sums out 0.56.
+
+  SPECULATION IS OFF THE LIST, and this pass is the reason: it is short of break-even by 3x to 10x with
+  either draft source, and the two levers already named in kria-speed2-results.txt beat it outright.
+  THE NEXT LEVER, in the order I would take it:
+  1. FEWER, LONGER ENGINE RUNS - 6.70 ms a token of measured gap.  The model stream takes 32.80 ms
+     against the fabric's 26.10 ms floor, and it is not the memory: the head stream, one long sequential
+     read of 65,667,072 bytes, runs at 15.93-16.01 GB/s on the same DDR in the same token.  What differs
+     is 120 short runs a token, each with its activation reload, register writes, descriptor setup,
+     completion poll and drain.  PROJECTION: 59.6 - 6.7 = 52.9 ms a token, 18.9 tok/s.
+  2. BATCHED GENERATION ACROSS INDEPENDENT CONVERSATIONS.  This is the lever speculation was a poor
+     imitation of.  The engines already answer one pass of the stream for four vectors, ctrl[10:9]
+     already carries the batch, and four separate conversations have NO dependency - so every position
+     in the batch is a real token, always, with no acceptance risk and no wasted work.  Tonight's point-4
+     table prices it honestly: at B=4 the stream falls to 0.397x but the ARM work rises to 1.210x, so the
+     first thing to fix on the way is the sums-out stage (9.287x) and the glue (0.946x).  PROJECTION,
+     using the same T(B) the study built: T(4) = 161.2 ms for four tokens, 40.30 ms each, 24.82 tok/s a
+     conversation.  THAT NUMBER IS EXACTLY THE STUDY'S SPECULATION CEILING - the one it called
+     unreachable because it assumed a drafter that is both free and always right.  Four independent
+     conversations reach it without a drafter at all, because every position in the batch is a real
+     token.  (kria-speed2-results.txt projected 43.2 ms and 23.1 tok/s for the same lever by a different
+     route; both are projections and neither has been built.)
+  3. THE GLUE, 6.85 ms a token in two passes over 6912 elements, 11.5% of a token, and the one part of
+     the pipeline untouched since it was built.  It does not batch (0.946x at B=4), which makes it the
+     thing standing between lever 2 and its projection.
+  AND ONE MORE, ON THE SAME FRAGILITY THE STALL EXPOSED and not taken tonight: parallel_for's join loop
+  still burns 8 x POOL_SPIN spins - about 1.2 ms - before it yields.  It shows in tonight's numbers.
+  On q20_forloop, going from a quiet board to a quarter of an A53 taken, the FIXED runtime's attention
+  rises 7.584 -> 9.318 ms a forward (+1.734) and its norms 3.373 -> 3.812 (+0.439), while its scan rises
+  2.325 -> 4.587 (+2.262).  The scan is still the largest single leak but it is no longer in a class of
+  its own: the join loop now costs the same order of milliseconds.  The scan was the one that mattered
+  and the forward is now at its fair share of a disturbed machine, so the join loop was left alone; it is
+  the next thing to bound if the board is ever expected to share its cores.
+
+FILES
+  board/bitnet_kria.c                                    the runtime; the stall fix and the guarded
+                                                         POOL_TRACE block are the only changes
+  board/research/ternary/bitnet/kria-spec-results.txt    this file
+  board/research/ternary/bitnet/speculation-study.txt    the study, in full
+  board/research/ternary/bitnet/spec_study.py            the rollouts and the arithmetic
+  board/research/ternary/bitnet/spec_shallow.py          the truncated-model pass on the RTX 4080
+  board/research/ternary/bitnet/spec-ctx.json            28 (n,k) rollouts: rounds, drafts, accepted
+  board/research/ternary/bitnet/spec-shallow.json        per-position agreement masks, every L
+  board/research/ternary/bitnet/spec-state.txt           the setup block, verbatim
+  board/research/ternary/bitnet/spec-stagecheck.txt      the stage check, verbatim
+  board/research/ternary/bitnet/spec-compare.txt         the six quiet id comparisons, prompt by prompt
+  board/research/ternary/bitnet/spec-compare-noise.txt   the two disturbed id comparisons
+  board/research/ternary/bitnet/spec-numbers.txt         the battery totals
+  board/research/ternary/bitnet/spec-three-quiet.txt     the three named prompts, quiet, both binaries
+  board/research/ternary/bitnet/spec-three-noise.txt     the same with a quarter of an A53 taken
+  board/research/ternary/bitnet/spec-three-spin.txt      q20_forloop with one A53 taken outright
+  board/research/ternary/bitnet/spec-power-lfl.txt       power, fixed binary, like for like
+  board/research/ternary/bitnet/spec-power-lfl-before.txt  the same, pre-fix binary
+  board/research/ternary/bitnet/spec-power-long.txt      power, 256 generated tokens
+  board/research/ternary/bitnet/spec-ids-after.json      the battery, fixed binary, quiet      2097 ids
+  board/research/ternary/bitnet/spec-ids-before.json     the battery, pre-fix binary, quiet    2097 ids
+  board/research/ternary/bitnet/spec-ids-after-noise.json   the battery, fixed, disturbed      2097 ids
+  board/research/ternary/bitnet/spec-ids-before-noise.json  the battery, pre-fix, disturbed    2097 ids
+  board/research/ternary/bitnet/spec-bench-after.json    the five bench prompts x 3, fixed      876 ids
+  board/research/ternary/bitnet/spec-bench-before.json   the same, pre-fix binary               876 ids
+  the protected baselines, unchanged: pv2-ids-fabric.json (2097), pv2-bench.json (876)
+
+COMMANDS (on the board, /home/ubuntu/bitnet-kria)
+  gcc -O3 -Wall -Wextra -std=c11 -march=armv8-a+crc -ffp-contract=off -o bitnet_kria bitnet_kria.c -lm -lpthread
+  gcc ... -DPOOL_TRACE -o bitnet_kria_trace bitnet_kria.c -lm -lpthread
+  sudo -A ./bitnet_kria --stage-check refdump/stages.bin --head fabric --threads 4
+  python3 headcheck.py spec-ids-after.json  --head fabric --exe ./bitnet_kria
+  python3 headcheck.py spec-ids-before.json --head fabric --exe ./bitnet_kria_before
+  python3 headcheck.py --compare pv2-ids-fabric.json spec-ids-after.json
+  python3 headcheck.py --numbers spec-ids-after.json
+  python3 provebench.py --exe ./bitnet_kria --head fabric --repeats 3 --out spec-bench-after.json
+  python3 provebench.py --compare pv2-bench.json spec-bench-after.json
+  ./noise 250 1000 noise.stop &            (a quarter of an A53 a second; 1000 1000 takes one outright)
+  sudo -A ./bitnet_kria --max-new 160 --context 1024 --threads 4 --head fabric --timing --quiet < q20.txt
+  sudo -A env EXE=./bitnet_kria FLAGS="--head fabric" IDS=ids-lfl.txt NEW=80 CTX=512 \
+       LOG=spec-power-lfl.log MARKS=spec-power-lfl.marks RUN=spec-power-lfl-run.log ./power-bitnet.sh
+  the three blocks that produced this file: spec1.sh (state, stage check, both quiet batteries),
+  spec2.sh (both bench runs, the three prompts quiet, three power runs, the compares),
+  spec3.sh (the three prompts disturbed, both disturbed batteries, their compares).
+ON THE PC
+  cd board/research/ternary/bitnet && python spec_shallow.py     (RTX 4080, ~7 s)
+  cd board/research/ternary/bitnet && python spec_study.py       (no GPU, ~20 s)
+
+WHAT IS MEASURED AND WHAT IS PROJECTED, one last time
+  MEASURED: every tokens-a-second, millisecond-a-token, shift-scan, watt and joule in sections 1, 5, 6, 7
+    and 8; every id comparison; every acceptance rate in section 2 (they come from ids the board really
+    produced and from a real forward of the real model on the 4080).
+  DERIVED FROM MEASUREMENTS, arithmetic only: the per-call table in section 4 (57 x the per-position
+    timer, minus four generation forwards, over the prompt calls) and the joules a token in section 8.
+    The per-call split assumes the four generation forwards cost their batch-1 per-position values; at
+    four forwards in fifty-seven the error is under a percent of any row.
+  PROJECTED, and none of it measured: every millisecond-a-token and tokens-a-second attached to
+    speculation in section 2, because that path does not exist; and the lever projections in section 9.

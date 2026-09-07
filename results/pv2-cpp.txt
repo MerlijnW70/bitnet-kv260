@@ -1,0 +1,14 @@
+llama-completion exit 0, wall 70.698785731 s
+1.09.853.398 I common_perf_print:        load time =   32924.14 ms
+1.09.853.481 I common_perf_print: prompt eval time =    3790.46 ms /    17 tokens (  222.97 ms per token,     4.48 tokens per second)
+1.09.853.565 I common_perf_print:        eval time =   28519.53 ms /    79 runs   (  361.01 ms per token,     2.77 tokens per second)
+1.09.853.644 I common_perf_print:       total time =   32512.55 ms /    96 tokens
+	Maximum resident set size (kbytes): 1386672
+after   196 samples  power mean 3.804 W  min 3.780 W  max 3.910 W   mean 753 mA at 5.051 V
+before  196 samples  power mean 3.802 W  min 3.770 W  max 4.110 W   mean 753 mA at 5.051 V
+during 1386 samples  power mean 4.620 W  min 3.810 W  max 6.170 W   mean 915 mA at 5.050 V
+idle (5th percentile of the whole log) 3.790 W; 1778 samples
+start+load    949 samples  power mean 3.920 W  min 3.770 W  max 5.980 W  over  48.258 s
+prompt eval    74 samples  power mean 5.275 W  min 4.980 W  max 6.110 W  over   3.790 s    17 tokens =  4.48 tok/s, 1.176 J a token, 0.331 J over idle
+generation    557 samples  power mean 5.438 W  min 4.070 W  max 6.170 W  over  28.520 s    79 tokens =  2.77 tok/s, 1.963 J a token, 0.595 J over idle
+after         197 samples  power mean 3.808 W  min 3.780 W  max 4.240 W  over  10.042 s

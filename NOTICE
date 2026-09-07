@@ -1,0 +1,144 @@
+NOTICE
+======
+
+bitnet-kv260 -- microsoft/bitnet-b1.58-2B-4T, all 30 layers, on a Xilinx Kria KV260, with every
+ternary matrix product streamed through four engines in the FPGA fabric and attention, the norms
+and the exact top-K rescore on the four Cortex-A53 cores.
+
+Copyright 2026 Merlijn W
+
+The original work in this repository -- the Verilog, the testbenches, the C, the Python, the Tcl,
+the shell scripts and the documentation -- is licensed under the Apache License, Version 2.0; see
+LICENSE for the full text, including its express grant of patent rights, which is why this licence
+was chosen for a hardware architecture. You may not use that work except in compliance with the
+License. Unless required by applicable law or agreed to in writing, it is distributed on an "AS IS"
+BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+
+The source files carry no licence header, because this project's rule forbids comments in code.
+Apache 2.0 does not require one: its section 4 is satisfied by LICENSE and this file, and both must
+travel with any copy or derivative you distribute.
+
+The following are NOT covered by that licence. Read this before redistributing anything here.
+
+
+1. firmware/kv260-bitnet.bit.bin -- the FPGA bitstream
+------------------------------------------------------
+
+Generated with AMD Vivado Design Suite 2026.1 for the AMD XCK26 (Kria KV260 Vision AI Starter Kit,
+part xck26-sfvc784-2LV-c) from the sources in hardware/.
+
+It contains AMD LogiCORE IP in machine-executable form: the Zynq UltraScale+ MPSoC Processing
+System (PG201), AXI DMA (PG021), AXI GPIO (PG144), AXI SmartConnect (PG247), AXI4-Stream Register
+Slice (PG085) and Processor System Reset (PG164). Each of those product guides states that the
+core "is provided at no additional cost with the AMD Vivado Design Suite under the terms of the
+End User License", which is what section 3.1(3)A of that agreement requires of a "Core".
+
+It is redistributed under section 3.1(3)C of the AMD/Xilinx End User License Agreement, which
+permits distribution of Distributable Components that "have been converted into a machine
+executable form, such as in the case of a Core or Design Element, a Bitstream", and under the same
+section's requirement that "Distributable Components shall be distributed only for use to program
+a Xilinx Device".
+
+  It is supplied SOLELY for programming an AMD/Xilinx device -- specifically the XCK26 on a
+  Kria KV260 -- and for no other purpose. Section 4(a) of that agreement forbids using a
+  Bitstream to program or develop designs for non-AMD devices.
+
+No .xci, .dcp, ip/ tree or synthesised IP netlist is shipped here: those would be Distributable
+Components in Modifiable or Restricted form, for which the agreement's alternative limb applies and
+a recipient would need their own Vivado licence. hardware/build-ffn.tcl regenerates all of them, so
+nothing is lost.
+
+AMD, Xilinx, Vivado, Kria, LogiCORE and Zynq are trademarks of Advanced Micro Devices, Inc.
+This project is not affiliated with, sponsored by or endorsed by AMD.
+
+  EULA: https://www.xilinx.com/cgi-bin/docs/rdoc?t=eula
+
+
+2. The model weights -- microsoft/bitnet-b1.58-2B-4T
+-----------------------------------------------------
+
+NOT REDISTRIBUTED HERE. tools/prep.sh downloads the checkpoint from Hugging Face onto your own
+machine and repacks it locally. Nothing in this repository is derived from the weights.
+
+If you redistribute the packed files that tools/prep.sh produces -- model3.bin, norms.bin,
+embed_bf16.bin, head_i8.bin, head_scale.bin, head3_t.bin, head_t_scale.bin -- note that norms.bin
+and embed_bf16.bin are byte-for-byte Microsoft tensors and the rest are derivatives. Microsoft
+releases the model under the MIT License, whose one condition is that its copyright and permission
+notice travel with "all copies or substantial portions". A verbatim copy of that notice is in
+THIRD_PARTY_LICENSES/LICENSE.microsoft-bitnet; put it beside the files, not only in a repository.
+
+  Copyright (c) Microsoft Corporation. MIT License.
+  Model:            https://huggingface.co/microsoft/bitnet-b1.58-2B-4T
+  Technical report: BitNet b1.58 2B4T Technical Report, arXiv:2504.12285
+
+Microsoft's own note on the model, from its model card's disclaimer -- reproduced here because it
+is honest, not because any licence requires it:
+
+  "We do not recommend using BitNet b1.58 in commercial or real-world applications without
+   further testing and development."
+
+The tokenizer (tokenizer.json, the LLaMA 3 tokenizer, vocabulary 128,256) is deliberately NOT
+shipped here either. It is fetched from the checkpoint's own Hugging Face snapshot by
+tools/prep.sh. Microsoft ships it under MIT; whether a re-derived BPE table is a "Llama Material"
+under Meta's Llama 3 Community License is untested, and one 17 MB download deletes the question.
+
+
+3. u-dma-buf
+-------------
+
+NOT REDISTRIBUTED HERE. setup.sh clones https://github.com/ikwzm/udmabuf on your board and builds
+the module against your running kernel's headers. No u-dma-buf code is included in this repository.
+
+  Copyright (c) 2015-2026 Ichiro Kawazome, BSD 2-Clause License.
+  The module itself declares MODULE_LICENSE("Dual BSD/GPL").
+  A copy of the licence text is in THIRD_PARTY_LICENSES/LICENSE.u-dma-buf for reference.
+
+No prebuilt .ko is shipped, on purpose: an out-of-tree module's vermagic binds it to one exact
+kernel build, so a prebuilt one would fail with "Invalid module format" after the first apt
+upgrade, with nothing to indicate why. For a packaged route, see ikwzm/u-dma-buf-kmod-dpkg.
+
+
+4. Fetched at install time, not redistributed
+----------------------------------------------
+
+  tokenizers, transformers, huggingface_hub   Apache-2.0   Hugging Face
+  numpy, torch                                BSD-3-Clause
+  requests                                    Apache-2.0
+  device-tree-compiler (dtc)                  GPL-2.0      apt
+  Icarus Verilog (optional, RTL self-test)    GPL-2.0      apt
+
+fpgautil, xmutil, dfx-mgr and the boot firmware are part of the Kria Ubuntu image and are not
+distributed here.
+
+The CPU baseline this project measures itself against, bitnet.cpp
+(https://github.com/microsoft/BitNet, MIT, Copyright (c) Microsoft Corporation), is built by you if
+you want the comparison. runtime/power-bitnetcpp.sh and tools/quality_bitnetcpp.py shell out to a
+llama-cli that you built; no part of bitnet.cpp is vendored here and none should be.
+
+
+5. runtime/bitnet_chat.jinja
+-----------------------------
+
+The 340-byte chat template is the checkpoint's own, from microsoft/bitnet-b1.58-2B-4T (MIT,
+Copyright (c) Microsoft Corporation). It is kept as a file so the prompt bytes this project
+measured can be reproduced exactly; the same template is also written out inline in
+bitnet_chat.py's chat_text().
+
+
+6. hardware/mul16.v
+--------------------
+
+The 16x16 multipliers in the FFN glue were not written by hand and are not from any third party:
+they were grown by an evolutionary circuit compiler, assembled from sixteen partial-product pieces
+it kept. They are original work under this repository's Apache 2.0 licence.
+
+The provenance that stood in the file's own headers, kept here because the source carries no
+comments: the modules pp00..pp15 and serial_add were emitted by `oracle netlist`, and in each of
+them the line `always @(posedge clk or posedge rst)` was rewritten to `always @(posedge clk)`, so
+rst is a synchronous clear. pp00..pp15 are the card-kept grids expeditions/mul/pp<i>fed.grid and
+serial_add is expeditions/serial/planned.grid; mul16 composes them into a bit-serial 16x16
+multiplier, a balanced tree four levels deep with a register on every node.
+
+Nothing in hardware/ or runtime/ instantiates a Xilinx primitive -- no BUFG, XPM_, FDRE, RAMB or
+DSP48 appears anywhere; the only vendor-specific text is the X_INTERFACE_INFO attribute strings,
+which we wrote.

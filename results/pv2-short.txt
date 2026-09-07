@@ -1,0 +1,12 @@
+=== rep 1 crc32 30+77, prompt-batch 4
+prompt 30 tokens 1079.1 ms (27.80 tok/s), generated 77 4451.6 ms (17.30 tok/s)
+per forward over 106 (ms): engines qkv 3.626, o 2.877, gate+up 14.413, down 6.444 (27.360 together); activation loads 0.725; glue A 3.436 B 3.415; shift scan 2.961; sums out 0.997; attention 4.603; norms, quant, RoPE and residuals 3.350; waiting on the side thread 0.006; forward total 48.217. side thread busy 3.289 ms a forward (beats and the FFN scale, off the critical path). head 5.405 ms a call over 77 calls
+head stages (ms a call over 77 calls): stage 1 ternary stream 4.113, its activation load 0.007, sync and top-256 1.079, stage 2 exact rescore 0.195, head total 5.405
+=== rep 2 crc32 30+77, prompt-batch 4
+prompt 30 tokens 1040.0 ms (28.85 tok/s), generated 77 4566.9 ms (16.86 tok/s)
+per forward over 106 (ms): engines qkv 3.626, o 2.875, gate+up 14.410, down 6.446 (27.356 together); activation loads 0.725; glue A 3.434 B 3.417; shift scan 2.691; sums out 0.980; attention 4.614; norms, quant, RoPE and residuals 3.346; waiting on the side thread 0.007; forward total 48.942. side thread busy 3.281 ms a forward (beats and the FFN scale, off the critical path). head 5.396 ms a call over 77 calls
+head stages (ms a call over 77 calls): stage 1 ternary stream 4.113, its activation load 0.007, sync and top-256 1.070, stage 2 exact rescore 0.195, head total 5.396
+=== rep 3 crc32 30+77, prompt-batch 4
+prompt 30 tokens 1085.7 ms (27.63 tok/s), generated 77 4572.7 ms (16.84 tok/s)
+per forward over 106 (ms): engines qkv 3.628, o 2.878, gate+up 14.398, down 6.446 (27.350 together); activation loads 0.726; glue A 3.433 B 3.418; shift scan 3.069; sums out 0.986; attention 4.594; norms, quant, RoPE and residuals 3.390; waiting on the side thread 0.006; forward total 49.424. side thread busy 3.285 ms a forward (beats and the FFN scale, off the critical path). head 5.391 ms a call over 77 calls
+head stages (ms a call over 77 calls): stage 1 ternary stream 4.122, its activation load 0.007, sync and top-256 1.057, stage 2 exact rescore 0.195, head total 5.391

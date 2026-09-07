@@ -1,0 +1,12 @@
+=== rep 1 prompt-batch 4
+prompt 53 tokens 1924.5 ms (27.54 tok/s), generated 307 21832.8 ms (14.06 tok/s)
+per forward over 360 (ms): engines qkv 3.959, o 3.397, gate+up 16.052, down 7.031 (30.439 together); activation loads 0.818; glue A 3.437 B 3.417; shift scan 2.784; sums out 0.648; attention 14.509; norms, quant, RoPE and residuals 3.421; waiting on the side thread 0.008; forward total 61.379. side thread busy 3.344 ms a forward (beats and the FFN scale, off the critical path). head 5.364 ms a call over 307 calls
+=== rep 2 prompt-batch 4
+prompt 53 tokens 1878.6 ms (28.21 tok/s), generated 307 21966.7 ms (13.98 tok/s)
+per forward over 360 (ms): engines qkv 3.959, o 3.393, gate+up 16.056, down 7.029 (30.437 together); activation loads 0.819; glue A 3.437 B 3.417; shift scan 2.665; sums out 0.646; attention 14.561; norms, quant, RoPE and residuals 3.410; waiting on the side thread 0.009; forward total 61.560. side thread busy 3.341 ms a forward (beats and the FFN scale, off the critical path). head 5.419 ms a call over 307 calls
+=== rep 3 prompt-batch 4
+prompt 53 tokens 1990.0 ms (26.63 tok/s), generated 307 24951.9 ms (12.30 tok/s)
+per forward over 360 (ms): engines qkv 3.964, o 3.409, gate+up 16.064, down 7.039 (30.476 together); activation loads 0.821; glue A 3.437 B 3.418; shift scan 11.505; sums out 0.647; attention 14.768; norms, quant, RoPE and residuals 3.476; waiting on the side thread 0.033; forward total 70.214. side thread busy 3.362 ms a forward (beats and the FFN scale, off the critical path). head 5.378 ms a call over 307 calls
+=== rep 4 prompt-batch 4
+prompt 53 tokens 1971.2 ms (26.89 tok/s), generated 307 21841.0 ms (14.06 tok/s)
+per forward over 360 (ms): engines qkv 3.957, o 3.400, gate+up 16.059, down 7.031 (30.446 together); activation loads 0.817; glue A 3.436 B 3.418; shift scan 3.000; sums out 0.651; attention 14.511; norms, quant, RoPE and residuals 3.377; waiting on the side thread 0.014; forward total 61.536. side thread busy 3.346 ms a forward (beats and the FFN scale, off the critical path). head 5.359 ms a call over 307 calls

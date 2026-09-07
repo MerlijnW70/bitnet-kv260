@@ -1,0 +1,363 @@
+BitNet b1.58 2B4T, all 30 layers, running on the Kria KV260: every ternary matrix streamed through the four grown
+matvec engines in the fabric, the FFN nonlinearity through the grown mul16 glue, the rest on the four A53s.
+Measured 2026-09-06: 14.9 tokens/s of prompt and 8.0-8.3 tokens/s of generation at 5.5 W, against bitnet.cpp's
+4.5 / 2.8 tokens/s at 5.1 W on the same board, the same model and the same question.
+
+WHAT IS GROWN AND WHAT IS NOT (unchanged from ffn-results.txt; the fabric was not rebuilt or reloaded for this work)
+  Grown by Oracle: the four multiplies of the FFN's activation chain (S = a a, T = S' b, V = T' |G| in pass A and
+  P = |h| m in pass B), each a mul16 (board/mul16.v, sixteen card-kept partial-product pieces and fifteen card-kept
+  serial adders), three a chain, eight chains = 24 pieces in the fabric.
+  Hand-written: the four ternary matvec engines (board/ternary_matvec.v), the glue shell (board/ternary_glue.v),
+  the block design (board/build-ffn.tcl).
+  On the A53: the norms, the activation quantisers, RoPE, attention, the shift scan, the residuals and the int8 head
+  (board/bitnet_kria.c).
+
+SETUP
+  Board: Kria KV260 (xck26-sfvc784-2LV-c), hostname kria, Ubuntu 22.04.4, kernel 5.15.0-1027-xilinx-zynqmp,
+  3911 MB RAM, no swap, cma=1000M (CmaTotal 1024000 kB), 15 GB free on /, gcc 11.4.0.
+  Bitstream: board/ffn.bit.bin, md5 e2c75fd399848b1f672326f4a559f236 on the board at /home/ubuntu/ffn/ffn.bit.bin,
+  loaded with board/ffn.dtso; /sys/class/fpga_manager/fpga0/state = operating throughout. NOT rebuilt and NOT
+  reloaded for this measurement; no reboot.
+  Buffers: /dev/udmabuf0 phys 0x0038300000 size 545259520 (the 521 MB of weights), /dev/udmabuf1 phys 0x0058b00000
+  size 8388608 (253952 bytes used).
+  Binary measured: board/bitnet_kria.c, md5 a7aa05e233f082d2e112cfb54433594d, identical on the PC and the board;
+  rebuilt here with
+    gcc -O3 -Wall -Wextra -std=c11 -march=armv8-a+crc -ffp-contract=off -o bitnet_kria bitnet_kria.c -lm -lpthread
+  which printed no warnings and produced a byte-identical binary (md5 d0db746cdbc38ac5385c9bbcea3643a3 before and
+  after the rebuild), so the numbers below belong to the source in the repository.
+  Model data on the board in /home/ubuntu/bitnet-kria: model.bin 521011200 B, manifest.json, norms.bin 1761280 B,
+  embed_bf16.bin 656670720 B, head_i8.bin 328335360 B, head_scale.bin 513024 B, tokenizer.json.
+  Power: /sys/class/hwmon/hwmon2 (ina260_u14) power1_input uW, curr1_input mA, in1_input mV, sampled every 50 ms.
+  Temperatures: /sys/class/hwmon/hwmon0 (ams) temp1 = PS, temp3 = PL, millidegrees.
+  Baseline: bitnet.cpp at /home/ubuntu/bitnet (BitNet 0b341e58 + llama.cpp 390c3077, clang-18, the three ARM patches
+  of kria.txt), model ggml-model-i2_s.gguf 1187801280 B, sha256 4221b252fdd5...84c2162.
+
+FIVE THINGS THAT WERE WRONG WITH THE MEASUREMENT AND WERE FIXED BEFORE ANY NUMBER WAS KEPT
+  1. polkitd was spinning at 88.9% of one A53 (9:42 of CPU) when the first idle sample was taken. It would have
+     charged a busy core to every number here. `sudo systemctl restart polkit` stopped it; every measurement below
+     was taken after that, with `top -bn1` showing no process above 12%.
+  2. The sampler of board/power-ffn.sh is a shell loop that forks `date` and three `cat`s every 50 ms: 80 forks a
+     second on four A53s. Measured A/B on the SAME run (the like-for-like prompt, 16 ids, 80 generated, 4 threads):
+       with the forking loop     6.92 tok/s generated, head 68.431 ms a call, engines 44.752 ms a forward
+       with one long-lived process 8.00 tok/s generated, head 52.557 ms a call, engines 43.146 ms a forward
+     and the idle it reports is 0.13 W higher (3.609 W over a 40 s standalone sample against 3.482 W). The loop was
+     replaced by board/ina260-sample.py, one process that keeps the three sysfs files open and seeks them; all the
+     power numbers below use it. The forking loop's own cost is 13.5% of the generation rate and 30% of the head.
+  3. The first bitnet.cpp power run was cold: llama's own "load time = 78966.16 ms" off the SD card filled the
+     window and pulled its mean to 3.983 W. Re-run warm (load time 2727.24 ms) it reads 4.870 W over the window.
+  4. board/power-bitnetcpp.sh's first grep for llama's timings missed them: this build prefixes every line with
+     "0.41.447.893 I common_perf_print:", so "^ *eval time" never matched. The pattern is now "eval time".
+  5. The whole-window mean of a llama run is NOT its generation power: the window holds a 6 s start and load at
+     3.72 W, the prompt eval at 4.89 W and only then the generation at 5.14 W. The trace was segmented by counting
+     llama's own reported prompt-eval and eval milliseconds backwards from the end of the high-power region
+     (segments.py); the segment boundaries it finds land on the steps visible in the one-second trace.
+
+CORRECTNESS OF THE BINARY THAT WAS MEASURED (re-run here, not quoted from another agent)
+  sudo ./bitnet_kria --stage-check refdump/stages.bin --context 64
+    "stage check: every integer stage exact, every float stage above its cosine floor, every top-1 the reference's"
+  All 8 dumped prompt positions through all 30 layers: 13 integer arrays x 8 positions exact (l0_xq, l0_qi, l0_ki,
+  l0_vi, l0_aq, l0_oi, l0_x2q, l0_g, l0_u, l0_shifts, l0_h, l0_q8, l0_d), and at position 7, verbatim:
+    "hidden cosine against the reference, layer by layer: 0:1.000000 5:1.000000 10:0.999900 15:0.999828 20:0.999827 25:0.999859 30:0.999897"
+    "final_norm       2560 float   outside 1e-04+1e-04|ref|   2420   max|diff| 0.00766     of max|ref| 0.5271      cosine 0.999440460  ok"
+    "logits         128256 float   max|diff| 0.5261   cosine 0.999891269"
+    "top-1          argmax 5380, reference 5380  same"
+  The five prompts below were each run three times and every one produced byte-identical token ids all three times
+  (runbench.py's "identical ids across repeats: True" for all five), and --threads 1 and --threads 4 were shown by
+  the generate agent to give the same ids.
+
+NUMBERS: TOKENS A SECOND (5 prompts x 3 repeats in one process, context 512, float32 KV cache, 4 threads; the
+runtime's own prompt/generation milliseconds, which exclude setup)
+  prompt      prompt ids  generated   prompt tok/s          generation tok/s
+                                      mean     min          mean    min
+  france          13          8       15.15   15.08          9.05    8.95
+  sky             16         58       14.94   14.55          8.15    7.88
+  haiku           14         21       14.79   14.14          8.46    8.14
+  shiftreg        16        128       14.92   14.54          7.75    7.52
+  crc32           30         77       14.80   14.47          7.95    7.82
+  over the 15 runs: prompt mean 14.92, min 14.14, max 15.21 tok/s; generation mean 8.27, min 7.52, max 9.11 tok/s
+  aggregate: 267 prompt tokens in 17.933 s = 14.89 tok/s; 876 generated tokens in 110.083 s = 7.96 tok/s
+  Longer runs, measured separately:
+    25-token prompt, 256 generated (context 512): 14.98 / 7.23 and 14.95 / 7.26 tok/s (two runs)
+    306-token prompt, 55 generated (context 512): 11.39 / 6.23 and 11.72 / 6.33 tok/s (two runs)
+    16-token prompt, 80 generated: 15.06 / 8.00 tok/s
+  Generation slows as the context grows because attention is the only stage that grows: measured 3.16 ms a forward
+  over a 20-forward run, 7.73 over 106, 9.94 over 144, 18.6 over 281 and 23.5 over 360. Every other stage is flat.
+
+NUMBERS: MILLISECONDS A FORWARD (the 15 bench runs, weighted by the 1131 forwards and 876 head calls in them)
+  engines qkv                        6.802     activation loads                   1.083
+  engines o                          3.971     glue pass A                        3.419
+  engines gate+up                   22.029     glue pass B                        3.406
+  engines down                      10.255     shift scan                         2.778
+  engines together                  43.058     sums out of the DMA buffer         2.129
+  attention                          7.682     norms, quant, RoPE and residuals   7.139
+  waiting on the side thread         0.098     side thread busy (off the path)    4.602
+  forward total                     72.793     head                              52.113 ms a call
+  A prompt token costs one forward; a generated token costs one forward and one head call, so 72.793 + 52.113 =
+  124.9 ms = 8.01 tok/s, against the measured aggregate of 7.96 tok/s over the 876 generated tokens (the forward
+  mean is weighted over all 1131 forwards, and generated forwards sit at the higher end of the context). The head
+  is 41.7% of a generated token and is paid only by generated tokens; the engines are 34.5% of a generated token
+  and 59.2% of a prompt token.
+  Verbatim, one run's line (bench rep 2, crc32, 30-token prompt and 77 generated):
+    "per forward over 106 (ms): engines qkv 6.806, o 3.967, gate+up 22.027, down 10.251 (43.052 together); activation loads 1.082; glue A 3.418 B 3.405; shift scan 2.765; sums out 2.114; attention 7.727; norms, quant, RoPE and residuals 7.117; waiting on the side thread 0.089; forward total 71.363. side thread busy 4.604 ms a forward (beats and the FFN scale, off the critical path). head 51.592 ms a call over 77 calls"
+  and at 360 positions (306-token prompt):
+    "per forward over 360 (ms): engines qkv 6.804, o 3.983, gate+up 22.072, down 10.274 (43.133 together); ... attention 23.269; norms, quant, RoPE and residuals 7.551; ... forward total 91.042. ... head 52.809 ms a call over 55 calls"
+
+NUMBERS: WEIGHT BANDWIDTH AND MAC RATE (bytes are exact: 2 bits a weight, so a matrix of N x K ternary weights is
+N K / 4 bytes; a layer streams 17367040 B and a token 521011200 B, which is model.bin whole)
+  phase              bytes a token        ms a forward   GB/s      G ternary MAC/s
+  qkv (3840 neurons)     73728000            6.802      10.839          43.36
+  o_proj                 49152000            3.971      12.378          49.51
+  gate+up               265420800           22.029      12.049          48.19
+  down_proj             132710400           10.255      12.941          51.76
+  together              521011200           43.058      12.100          48.40
+  2084044800 ternary multiply-accumulates a token at 48.40 G MAC/s. These are the same rates the FFN alone reached
+  (ffn-results.txt: gate+up 12.08 GB/s, down 12.92 GB/s, 49.4 G MAC/s), so nothing was lost putting 30 layers and
+  four phases a layer behind them. The limit is the DDR read path over the four HP ports, not the engines:
+  matvec4-results.txt measured 12.14 GB/s mean and 12.25 GB/s best on a gate_proj-shaped matrix through the same
+  four ports, and down_proj's longer neurons reach 12.94 GB/s here, so the path's real ceiling is a little above
+  13 GB/s and the engines idle against it.
+  down_proj is the fastest phase (12.94 GB/s) and it has the longest neurons, 1728 bytes against 640 for every
+  other phase, which is the same ordering ffn-results.txt measured. Among the three 640-byte-neuron phases the
+  order is o_proj 12.38, gate+up 12.05, qkv 10.84 GB/s; qkv is the outlier and these measurements do not say why
+  (it is the first engine phase of a layer, three matrices concatenated into one run of 3840 neurons, 960 an
+  engine, and its weight stream begins with a jump back across model.bin from the previous layer's down_proj).
+  The int8 head, for comparison, moves 328335360 B in 52.113 ms = 6.301 GB/s = 6.30 G int8 MAC/s on four A53s with
+  NEON: the fabric carries 1.92x the bytes a second and 7.7x the multiply-accumulates a second, the extra 4x being
+  the packing (four ternary weights a byte against one int8 weight a byte).
+
+NUMBERS: MEMORY AND THE SECONDS TO LOAD THE WEIGHTS
+  Warm (page cache holding model.bin), three runs:
+    "  /dev/udmabuf0 phys 0x0038300000 size 545259520: model.bin 521011200 bytes read in 1.22 s (426 MB/s)"  setup 1.44 s
+    "  ... read in 1.11 s (470 MB/s)"  setup 1.32 s
+    "  ... read in 1.08 s (481 MB/s)"  setup 1.30 s
+    and "  locked 331 MB of head weights, scales and norms into RAM in 0.20 s" in each.
+  Cold (sync; echo 3 > /proc/sys/vm/drop_caches first), one run, verbatim:
+    "  locked 331 MB of head weights, scales and norms into RAM in 21.11 s"
+    "  /dev/udmabuf0 phys 0x0038300000 size 545259520: model.bin 521011200 bytes read in 34.05 s (15 MB/s)"
+    "  setup 55.30 s"
+    15 MB/s is the SD card, not the DDR: 850 MB (model.bin + the mlocked head, scales and norms) off mmcblk1.
+  Without the mlock (--no-mlock): setup 1.10 s, but the first generation runs at 6.64 tok/s instead of 8.36 while
+  the head faults in; with it, setup is 0.20 s longer and the head is steady at 51.4-53.0 ms a call.
+  Maximum resident set size (/usr/bin/time -v, same 16-token prompt and 80 new tokens):
+    context 512   342808 kB      context 2048   342880 kB
+  The KV cache is allocated for the whole context but only touched up to the positions used, so RSS does not follow
+  --context; 331 MB of the 335 MB is the mlocked head, its scales and the norms. bitnet.cpp on the same board and
+  the same question: 1386676 kB, 4.0x more.
+  Board after the runs: free -m "3911 total, 1005 used, 2379 buff/cache, 2736 available"; CmaFree 198924 kB of
+  CmaTotal 1024000 kB; 15 GB free on /. CPU used by the runtime: 205% of the 400% four cores offer, because 43 of
+  a token's 125 ms are spent waiting on the engines, which cost no CPU.
+
+POWER (board/power-bitnet.sh with board/ina260-sample.py, 50 ms; the script stamps the setup, the first generated
+token and the "done" line as it reads the runtime's stdout, so each phase is cut at the right moment. Samples in
+board/research/ternary/bitnet/kria-model-power.log (the 256-token run) and kria-model-power-lfl.log)
+  Idle with the ffn bitstream loaded at 250 MHz and nothing running but the sampler: 3.476 to 3.492 W over the 14
+  idle segments of seven runs, mean 3.482 W, 688-691 mA at 5.051 V. The forking shell sampler reads the same state
+  at 3.55-3.61 W (see fix 2), against ffn-results.txt's 3.522-3.598 W for this board and this bitstream measured
+  with that sampler: the board's idle has not moved.
+  Verbatim, the 256-token generation (25-token prompt, context 512):
+    setup 1.323 s, prompt 1.726 s, generation 35.228 s, whole run 38.503 s
+    1 idle-before   294 samples  power mean 3.479 W  min 3.450 W  max 3.790 W   mean 688 mA at 5.051 V
+    2 setup          25 samples  power mean 4.154 W  min 3.690 W  max 4.240 W   mean 822 mA at 5.051 V
+    3 prompt         34 samples  power mean 5.368 W  min 5.080 W  max 5.910 W   mean 1060 mA at 5.051 V
+    4 generation    689 samples  power mean 5.492 W  min 4.340 W  max 6.030 W   mean 1086 mA at 5.051 V
+    5 tail            4 samples  power mean 3.752 W  min 3.730 W  max 3.780 W   mean 743 mA at 5.051 V
+    6 idle-after    295 samples  power mean 3.492 W  min 3.450 W  max 3.910 W   mean 691 mA at 5.051 V
+    prompt 25 tokens 1672.0 ms (14.95 tok/s), generated 256 35283.3 ms (7.26 tok/s)
+  and the run before it, the same prompt: generation 5.487 W over 35.362 s at 7.23 tok/s, prompt 5.337 W over
+  1.721 s at 14.98 tok/s, idle 3.483 / 3.482 W. The two agree to 0.005 W and 0.03 tok/s.
+  Every measured segment (power x duration / tokens; "over idle" subtracts the 3.483 W):
+    segment                        W        s    tok   tok/s        J   J/tok   J/tok over idle
+    story 1  generation        5.487   35.362    256    7.24   194.03   0.758         0.277
+    story 1  prompt            5.337    1.721     25   14.53     9.18   0.367         0.128
+    story 2  generation        5.492   35.228    256    7.27   193.47   0.756         0.276
+    story 2  prompt            5.368    1.726     25   14.48     9.27   0.371         0.130
+    lfl      generation        5.567    9.943     80    8.05    55.35   0.692         0.259
+    lfl      prompt            5.412    1.114     16   14.36     6.03   0.377         0.134
+    long     generation        5.418    8.629     55    6.37    46.75   0.850         0.304
+    long     prompt (306 ids)  5.232   26.168    306   11.69   136.91   0.447         0.150
+    shiftreg generation        5.529    2.360     20    8.47    13.05   0.652         0.241
+    shiftreg prompt            5.386    1.736     25   14.40     9.35   0.374         0.132
+    setup (paid once)          4.110    1.320      -       -     5.43       -             -
+  So a generated token costs 0.65-0.85 J and a prompt token 0.37-0.45 J as the INA260 sees the whole board, the
+  high ends of both ranges being the runs where the context, and with it attention, has grown. The board's 5.5 W
+  under load is 1.6x its 3.48 W idle: the four engines, the glue, the five DMAs and four busy A53s add 2.0 W.
+  Temperatures around the runs: PS 30.0-30.9 C, PL 28.0-29.3 C (hwmon0 temp1/temp3); nothing throttled.
+
+BITNET.CPP ON THE SAME BOARD, THE SAME QUESTION, LIKE FOR LIKE (board/power-bitnetcpp.sh; llama-completion, i2_s
+GGUF, 4 threads, --temp 0, -n 80, the same bitnet_chat.jinja template, no system message on either side; the board
+runs the same question through bitnet_kria with -n 80. Samples in kria-model-bitnetcpp-power.log)
+  llama-completion, verbatim:
+    load time =    2785.78 ms
+    prompt eval time =    3812.69 ms /    17 tokens (  224.28 ms per token,     4.46 tokens per second)
+    eval time        =   28613.33 ms /    79 runs   (  362.19 ms per token,     2.76 tokens per second)
+    total time       =   32614.01 ms /    96 tokens
+    Maximum resident set size (kbytes): 1386676
+  Its power trace, segmented by those milliseconds (segments.py), and the board's beside it:
+    phase                bitnet.cpp                          bitnet_kria (fabric)
+    idle                 3.488 W                             3.483 W
+    start and load       3.72 W, load 2.79 s (llama's own)   4.110 W over 1.32 s of setup
+    prompt eval          4.894 W over  3.813 s, 17 tokens    5.412 W over 1.114 s, 16 tokens
+    generation           5.136 W over 28.613 s, 79 tokens    5.567 W over 9.943 s, 80 tokens
+    max RSS              1386676 kB                          342808 kB
+  (the 3.72 W is the pre-prompt band of the one-second trace, kria-model-bitnetcpp-power.log seconds 15-20 of the
+  first run; llama's process start and its 1.19 GB mmap are quiet compared with either model actually running)
+  ENERGY A TOKEN, like for like:
+    generation: board 8.05 tok/s at 5.567 W = 0.692 J a token; bitnet.cpp 2.76 tok/s at 5.136 W = 1.860 J a token
+                -> 2.91x the rate, 2.69x fewer joules a token (2.31x counting only the increment over idle)
+    prompt:     board 14.36 tok/s at 5.412 W = 0.377 J a token; bitnet.cpp 4.46 tok/s at 4.894 W = 1.098 J a token
+                -> 3.22x the rate, 2.91x fewer joules a token (2.36x counting only the increment over idle)
+  The fabric draws MORE power than the four cores alone (5.57 W against 5.14 W) and still wins on energy because it
+  is nearly three times faster.
+  The same question with the system message of kria.txt ("You are a helpful assistant.") reproduced that file's
+  question (c) baseline: prompt eval 5772.61 ms / 26 tokens (4.50 tok/s) against its 4.57, eval 28637.72 ms /
+  79 runs (2.76 tok/s) against its 2.77, and the answer text identical word for word down to the "3. Counting" the
+  80-token limit cuts it at. The 4.5 / 2.7-2.8 tok/s baseline is therefore measured here, not quoted.
+  THE TWO AGREE ON THE FIRST 34 GENERATED TOKENS of the like-for-like answer and then part (the I2_S GGUF is a
+  different quantisation of the same weights):
+    identical prefix: 'A shift register is a type of sequential logic circuit that is used to store and shift
+    binary data. Here are three common applications of shift registers:\n\n1. **Data Storage'
+    board next:      '**: Shift registers are used to store data temporarily. They can hold a sequence of bits...'
+    bitnet.cpp next: ' and Transfer**: Shift registers are used to store data temporarily and transfer it...'
+
+AGREEMENT WITH THE HUGGING FACE MODEL (measured by the reference and generate agents; quoted here with its source)
+  ref_model.py against transformers 5.3.0 on an RTX 4080, 25-token prompt (model-agreement.txt): worst hidden-state
+  cosine 0.99809207 at layer 30, final-norm cosine min 0.99419739, logits cosine min 0.99538172 mean 0.99934717,
+  top-1 agreement 23/25 with both disagreements exact ties in HF's own bf16 logits (margin 0.0000), top-1 inside
+  HF's top-5 25/25, and 32/32 greedy tokens identical to HF's own greedy generation.
+  The board against that reference (--stage-check, re-run here): every integer stage exact at all 8 positions
+  through all 30 layers, every top-1 the reference's.
+  The board against HF over 994 generated tokens on 8 prompts (the generate agent's teacher-forced test): 981 of
+  994 (98.7%) are HF's own top-1 at that exact context and 994 of 994 are in HF's top 5; 4 of 5 free-running
+  sequences are token-identical to HF's greedy; all 13 disagreements have HF logit gaps of 0 to 0.5 on logits of
+  magnitude 13 to 33, five of them exact bf16 ties.
+
+ANSWERS, VERBATIM (greedy, --temp 0, context 512; each was produced three times with identical token ids)
+  > What is the capital of France?
+  The capital of France is Paris.
+      [13 prompt ids, 8 generated; 15.15 / 9.05 tok/s mean of 3]
+
+  > Explain in two sentences why the sky is blue.
+  The sky appears blue because of a phenomenon called Rayleigh scattering, where shorter blue wavelengths of
+  sunlight are scattered in all directions by the gases and particles in the Earth's atmosphere. This scattering
+  effect is more pronounced at the angle of the sun, making the sky look blue during the day.
+      [16 prompt ids, 58 generated; 14.94 / 8.15 tok/s]
+
+  > Write a haiku about an FPGA.
+  Silicon dreams take flight,
+  Circuit paths, light and bright,
+  FPGA's silent might.
+      [14 prompt ids, 21 generated; 14.79 / 8.46 tok/s]
+
+  > Name three things a shift register is used for.
+  A shift register is a type of sequential logic circuit that is used to store and shift binary data. Here are
+  three common applications of shift registers:
+
+  1. **Data Storage**: Shift registers are used to store data temporarily. They can hold a sequence of bits, which
+  can be shifted in or out as needed. This is useful in various digital systems, such as memory devices, where data
+  needs to be stored and retrieved in a specific order.
+
+  2. **Serial Communication**: Shift registers are often used in serial communication systems, such as UART
+  (Universal Asynchronous Receiver-Transmitter) and SPI (Serial Peripheral Interface). In these systems, data
+      [16 prompt ids, cut at the 128-token limit; 14.92 / 7.75 tok/s]
+
+  > What is a CRC-32 checksum, and why does hardware compute it with a shift register? Answer in three sentences.
+  A CRC-32 checksum is a widely used error-detecting code that is appended to data to detect accidental changes
+  during transmission or storage. It is computed by hardware using a shift register because it efficiently
+  processes the data in fixed-size blocks, allowing for parallel and fast calculations. The shift register's design
+  ensures that the algorithm can handle large data sets and maintain accuracy through repetitive operations.
+      [30 prompt ids, 77 generated; 14.80 / 7.95 tok/s]
+
+  > System: You are a helpful assistant. / User: Name three things a shift register is used for.
+  A shift register is used for storing binary data, performing arithmetic operations, and generating serial numbers.
+      [25 prompt ids, 20 generated; 14.85 / 8.28 tok/s. bitnet.cpp on the same prompt, from kria.txt and reproduced
+      here, answers "1. Data storage: A shift register is used to store data temporarily. ... 2. Data transmission:
+      ... 3. Counting" and is cut at 80 tokens.]
+
+  > Read this passage ... [306-token prompt ending "Question: in one sentence, why does a ternary network suit an
+    FPGA better than a processor?"]
+  A ternary network suits an FPGA better than a processor because it can be built exactly as wide as the data path
+  that feeds it, and the weights can be streamed straight from memory in their packed form, allowing for more
+  efficient use of the FPGA's flexibility and area.
+      [306 prompt ids, 55 generated; 11.72 / 6.33 tok/s]
+
+  > Write a short story, about two hundred words, about a small computer that yearns to see.
+  In a cluttered office, a small computer named Byte sat on a desk, surrounded by stacks of papers and empty coffee
+  cups. Its screen flickered with lines of code, but Byte felt unfulfilled. It longed to see the world beyond its
+  digital realm.
+
+  One day, a curious intern named Alex brought Byte a new lens attachment. With a mix of excitement and trepidation,
+  Byte attached the lens and powered it on. The world came into focus, and Byte's screen was no longer just a
+  display of code.
+
+  As Byte explored the office, it saw the vibrant colors of the plants, the intricate patterns of the wallpaper, and
+  the warm smiles of the people around it. It watched as Alex interacted with the world, using the computer to
+  create art, solve problems, and connect with others.
+
+  Byte realized that its purpose was not just to process information, but to be a part of the world. It began to
+  learn from Alex, absorbing the nuances of human interaction and the beauty of the physical world. With each
+  passing day, Byte's screen filled with images of the world, and its code became more sophisticated, reflecting
+  its newfound understanding.
+
+  Byte's journey was not just about learning to see, but about discovering the joy of being a part of something
+  greater
+      [25 prompt ids, cut at the 256-token limit; 14.95 / 7.26 tok/s, the run the power numbers above were taken on]
+
+  Through the chat front end (board/bitnet_chat.py), verbatim including its own timing line:
+    > Give me three uses for a field-programmable gate array, one line each.
+    1. Implementing custom digital signal processing algorithms.
+    2. Accelerating cryptographic operations and key management.
+    3. Managing and controlling complex hardware systems.
+    [23 prompt tokens 1.56 s (14.74 tok/s), 30 generated 3.72 s (8.06 tok/s), 5.28 s of wall clock]
+
+WHERE THE TIME GOES, AND WHAT WOULD MOVE IT (the two largest items are both at a measured ceiling)
+  Of a generated token's 124.9 ms: the engines 43.06 ms (34.5%), the head 52.11 ms (41.7%), attention 7.68 ms,
+  norms/quant/RoPE/residuals 7.14 ms, the two glue passes 6.83 ms, the shift scan 2.78 ms, sums out 2.13 ms,
+  activation loads 1.08 ms, waiting on the side thread 0.10 ms. Those parts add to 122.9 ms; the other 2.0 ms is
+  what the forward's own clock counts outside the timed stages (DMA arming, control writes, status polls).
+  The engines are on the DDR read path's own limit (12.10 GB/s against the 12.14-12.25 GB/s matvec4-results.txt
+  measured through the same four ports); 521 MB have to cross it once a token whatever runs above them.
+  The head is NEON-compute-bound, not DDR-bound: it reaches 6.30 GB/s where the engines reach 12.10, it scales
+  almost linearly with cores (the generate agent measured 189.13 ms at one thread against 49.57 at four), and two
+  other kernels measured on the board were slower (an explicit prefetch 73.00 ms, two rows a load 71.98 ms).
+  PROJECTION, marked as a projection and not a run: an int8 head in the fabric at the engines' measured 12.10 GB/s
+  would take 328335360 / 12.10e9 = 27.1 ms instead of 52.11, which would put a generated token at 99.9 ms =
+  10.0 tok/s, and at the same 5.5 W that is 0.55 J a token. Nothing of that is built or measured.
+
+FILES
+  board/bitnet_kria.c            not changed here; rebuilt and measured (md5 a7aa05e233f082d2e112cfb54433594d)
+  board/bitnet_chat.py           not changed here; run for the transcript above
+  board/power-bitnet.sh          new: samples the INA260 around a bitnet_kria run and cuts the trace into
+                                 idle / setup / prompt / generation / idle by stamping the runtime's own stdout
+  board/power-bitnetcpp.sh       new: the same around a llama-completion run of the i2_s GGUF
+  board/ina260-sample.py         new: the one-process sampler both scripts use (see fix 2)
+  board/research/ternary/bitnet/kria-model-results.txt   this file
+  board/research/ternary/bitnet/kria-model-power.log     1341 samples of the 256-token generation (s, uW, mA, mV)
+  board/research/ternary/bitnet/kria-model-power-lfl.log  834 samples of the like-for-like board run
+  board/research/ternary/bitnet/kria-model-bitnetcpp-power.log  1372 samples of the like-for-like bitnet.cpp run
+  board/research/ternary/bitnet/kria-model-bench.log     the 15 benchmark runs verbatim, answers included
+  (the four .log files are ignored by .gitignore's /board/research/ternary/bitnet/*.log, like ffn-power.log)
+  On the board, /home/ubuntu/bitnet-kria: bitnet_kria(.c), bitnet_chat.py, model.bin, manifest.json, norms.bin,
+  embed_bf16.bin, head_i8.bin, head_scale.bin, tokenizer.json, refdump/, refdump_bf16/, refstages.h,
+  ina260-sample.py, power-bitnet.sh, power-bitnetcpp.sh, and the measurement harness runbench.py, prompts.json,
+  mkids.py, decode.py, cmpgen.py, longprompt.txt, ids-*.txt, logs/.
+  The harness and the analysis scripts are not repository files; they are in the scratchpad at
+  .../scratchpad/measure/: runbench.py, prompts.json, mkids.py, decode.py, cmpgen.py, longprompt.txt (copied to the
+  board) and analyse.py, segments.py, energy.py, trace.py (run on the PC over the fetched logs).
+  Not touched: core/, any .rs file, simdr/, grit/, board/ternary_ffn.c, board/ternary_matvec.v, board/ternary_glue.v,
+  board/mul16.v, board/build-ffn.tcl, board/ffn.bit.bin, board/ffn.dtso. No bitstream rebuild, no reload, no reboot.
+
+COMMANDS (sudo on the board: echo oracle-kria | sudo -S ...; sudo's timestamp is per-session with no tty, so a
+python parent that spawns "sudo ./bitnet_kria" must itself be started under sudo)
+  scp board/power-bitnet.sh board/power-bitnetcpp.sh board/ina260-sample.py ubuntu@kria:/home/ubuntu/bitnet-kria/
+  ssh ubuntu@kria 'cd /home/ubuntu/bitnet-kria && gcc -O3 -Wall -Wextra -std=c11 -march=armv8-a+crc -ffp-contract=off -o bitnet_kria bitnet_kria.c -lm -lpthread'
+  ssh ubuntu@kria 'cd /home/ubuntu/bitnet-kria && sudo ./bitnet_kria --stage-check refdump/stages.bin --context 64'
+  ssh ubuntu@kria 'sudo systemctl restart polkit; top -bn1 | head -12'
+  ssh ubuntu@kria 'cd /home/ubuntu/bitnet-kria && sudo env PYTHONPATH=/home/ubuntu/.local/lib/python3.10/site-packages python3 runbench.py prompts.json logs/bench.json --repeats 3 --context 512 > logs/bench.txt 2>&1'
+  ssh ubuntu@kria 'sudo sh -c "sync; echo 3 > /proc/sys/vm/drop_caches"; cd /home/ubuntu/bitnet-kria && head -1 ids.txt | sudo ./bitnet_kria --max-new 2 --context 64'
+  ssh ubuntu@kria 'cd /home/ubuntu/bitnet-kria && sudo /usr/bin/time -v ./bitnet_kria --max-new 64 --context 512 < ids-lfl.txt'
+  ssh ubuntu@kria 'cd /home/ubuntu/bitnet-kria && sudo env LOG=logs/bitnet-power2.log MARKS=logs/bitnet-power2.marks RUN=logs/bitnet-power2-run.log IDS=ids-story.txt NEW=256 CTX=512 IDLE=15 ./power-bitnet.sh'
+  ssh ubuntu@kria 'cd /home/ubuntu/bitnet-kria && env BITNET=/home/ubuntu/bitnet LOG=/home/ubuntu/bitnet-kria/logs/bitnetcpp-power-lfl.log OUT=/home/ubuntu/bitnet-kria/logs/bitnetcpp-power-lfl-run NEW=80 THREADS=4 IDLE=15 SAMPLER=/home/ubuntu/bitnet-kria/ina260-sample.py PROMPT="Name three things a shift register is used for." ./power-bitnetcpp.sh'
+      (LOG and OUT must be absolute: the script cd's to $BITNET/BitNet before it runs llama-completion. Add
+       SYS="You are a helpful assistant." for the run with a system message.)
+  ssh ubuntu@kria 'cd /home/ubuntu/bitnet-kria && sudo env PYTHONPATH=/home/ubuntu/.local/lib/python3.10/site-packages python3 bitnet_chat.py --no-sudo --prompt "..." --max-new 128 --context 512'
+  On the PC, over the fetched logs: python analyse.py bench.json ; python segments.py bitnetcpp-power-lfl.log 3812.69 28613.33 ; python energy.py ; python trace.py bitnetcpp-power.log

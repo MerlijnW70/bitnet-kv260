@@ -1,0 +1,417 @@
+BitNet b1.58 2B4T on the Kria KV260, made faster without changing what it says: 8.0 -> 14.4 tokens/s of
+generation and 14.9 -> 17.2 of prompt, 0.75 -> 0.45 joules a generated token, and not one of the 2097
+generated token ids of the 31-prompt battery different from the ids the runtime produced before any of
+this work.  Re-run end to end on 2026-09-06/07 on the board as it now stands.
+
+  the five bench prompts, three times each, 876 generated tokens (the same 15 runs kria-model-results.txt
+  measured, the same prompts, the same context 512, the same one long-lived process):
+                                   prompt tok/s   generation tok/s   a generated token
+    before, pre-speed runtime         14.89            7.96              125.7 ms      (kria-model-results.txt)
+    before, the same binary tonight   16.02            8.31              120.3 ms      (it gains from the new bitstream)
+    after,  today's runtime           17.20           14.43               69.3 ms
+  the whole 31-prompt battery, 953 prompt and 2097 generated tokens:
+    before  14.74 / 7.77 tok/s        after  16.92 / 13.88 tok/s    a generated token 128.8 -> 72.0 ms
+  at 360 positions of context (53 prompt ids, 307 generated):
+    before   7.17 tok/s               after  12.01 tok/s            a generated token 139.5 -> 83.3 ms
+  1.81x the generation rate on the bench prompts, 1.79x on the battery, 1.68x at 360 positions; 1.15x the
+  prompt rate.  Against bitnet.cpp on this same board, this same model and this same question: 14.45
+  against 2.72 tokens/s generated, 5.31x, at 4.74x fewer joules a token.
+
+THE CENTRAL CLAIM, FIRST: NO TOKEN ID CHANGED
+  31 prompts, 2097 generated ids, compared id by id against the ids the pre-speed runtime produced (the
+  baseline kept before any speed work, /home/ubuntu/bitnet-kria/baseline/ids-arm-baseline.json, taken with
+  the original binary in its int8-ARM-head mode on the original bitstream):
+    python3 headcheck.py ids-prove-fabric.json --head fabric --exe ./bitnet_kria
+    python3 headcheck.py --compare baseline/ids-arm-baseline.json ids-prove-fabric.json
+      31 prompts, 2097 generated ids compared: ALL IDENTICAL
+  and the five bench prompts three times each, the pre-speed BINARY run tonight against today's:
+    python3 provebench.py --compare prove-baseline.json prove-after.json
+      15 runs, 876 generated ids compared: ALL IDENTICAL
+  Nine comparisons in all - more than 14000 id-against-id comparisons over six full battery runs, two
+  three-repeat bench runs, a 360-position pair and seven flag settings - every one the same id in the
+  same place.  They are listed under THE PROOF below and their output is in prove-idcheck.txt, verbatim.
+
+WHAT WAS CHANGED SINCE kria-model-results.txt, AND WHAT EACH PART COST
+  Three changes, in the order they were made; each has its own results file with the measurements that
+  justified it, and this file re-measures the three of them together, end to end, on the board as it
+  stands tonight.
+  1. THE TWO-STAGE HEAD ON THE FABRIC (kria-head-results.txt; board/bitnet_kria.c, --head fabric).
+     The int8 output head was 328335360 bytes read by four A53s at 6.3 GB/s, 52.1 ms of every generated
+     token, 41.7% of it.  It is now: stage 1, a ternary copy of the head (head_t.bin, 82083840 B, one
+     row-scale a row, rule absmean:0.6) streamed through the same four matvec engines the model already
+     uses; stage 2, the top 256 rows by that approximate score recomputed EXACTLY from head_i8.bin on the
+     A53s and the argmax taken over those.  Exact only if the true argmax is in the top 256, which is not
+     assumed: the study measured worst rank 56 over 2115 real head states (kria-head-results.txt), and
+     every id below is the check that it holds.  7.161 ms a call now, 52.309 before.
+  2. THE A53 SIDE (kria-overlap-results.txt; board/bitnet_kria.c).  The K cache tiled and transposed and
+     the scores NEON, four query heads riding one loaded tile row; the norms, the quantisers, RoPE, the
+     residuals and the embedding decode NEON; the engine sums read where the DMA left them instead of
+     memcpy'd; a pass dropped from the shift scan by an identity; the thread pool spinning before it
+     sleeps; a redundant copy of the hidden state gone.  Attention 10.19 -> 7.48 ms a forward on the
+     battery, the norms and their neighbours 7.27 -> 3.91, the sums out 2.25 -> 1.07.
+  3. THE FABRIC'S WRITE PATH (kria-ddr-results.txt; board/build-ffn.tcl only, no RTL change).  The five
+     AXI DMAs' S2MM burst 16 -> 256 beats and their S2MM memory port 32 -> 128 bits, so the int32 sums
+     leave in writes of up to 4096 bytes instead of 64 and the DDR turns the bus around far less often
+     between the weight reads and the sum writes.  The weight stream 12.08 -> 13.24 GB/s, the four engine
+     phases 43.12 -> 39.35 ms a forward.
+  Nothing else changed: the same model.bin, the same head_i8.bin and head_scale.bin, the same norms and
+  embeddings, the same tokenizer, the same greedy decode, the same float32 KV cache, the same engines and
+  glue RTL, the same stream format and control registers.
+
+SETUP
+  Board: Kria KV260 (xck26-sfvc784-2LV-c), hostname kria, Ubuntu 22.04.4, kernel 5.15.0-1027-xilinx-zynqmp,
+  3911 MB RAM, no swap, cma=1000M (CmaTotal 1024000 kB), gcc 11.4.0.  Idle when every number below was
+  taken; polkit was restarted before the first measurement, as kria-model-results.txt prescribes, after
+  which top showed no process above 9% and the load average was 0.4.  No other agent's process was on the
+  board and no other agent's work was on the fabric.
+  Bitstream: board/ffn.bit.bin, md5 10a64c4deb2d147b7ebc6160e4923ae1, loaded with board/ffn.dtso.  NOT
+  rebuilt and NOT reloaded for this measurement: /sys/class/fpga_manager/fpga0/state = operating
+  throughout, pl0_ref 249999998 Hz, no reboot.  The pre-change bitstream is kept on the board at
+  ~/ffn/ffn-shipped.bit.bin (md5 e2c75fd399848b1f672326f4a559f236).
+  Buffers: /dev/udmabuf0 phys 0x0038300000 size 545259520 (model.bin, 521011200 B), /dev/udmabuf1 phys
+  0x0058b00000 size 8388608 (activations, sums, glue beats, and the head's 513024 B of sums at 0x040000),
+  /dev/udmabuf2 phys 0x0059300000 size 83886080 (head_t.bin, 82083840 B).  All three below 4 GiB.
+  /etc/modprobe.d/u-dma-buf.conf: "options u-dma-buf udmabuf0=545259520 udmabuf1=8388608 udmabuf2=83886080".
+  Binary measured: board/bitnet_kria.c md5 fcbf52c5c4bd754f220f664e922e5384, identical on the PC and the
+  board; rebuilt here with
+    gcc -O3 -Wall -Wextra -std=c11 -march=armv8-a+crc -ffp-contract=off -o bitnet_kria bitnet_kria.c -lm -lpthread
+  which printed no warnings and produced a binary byte-identical to the one on the board (md5
+  97cfa59d132a5d0076ee0c4db1166d89 both before and after the rebuild), so every number below belongs to
+  the source in the repository.
+  Baseline binary: /home/ubuntu/bitnet-kria/baseline/bitnet_kria, md5 d0db746cdbc38ac5385c9bbcea3643a3 -
+  the runtime kria-model-results.txt measured, before any of the three changes.  It has no --head flag.
+  Model data unchanged: model.bin 521011200 B, head_i8.bin 328335360 B, head_scale.bin 513024 B,
+  norms.bin, embed_bf16.bin, tokenizer.json, refdump/.  Added by change 1: head_t.bin 82083840 B md5
+  7f2850dced9d43476b000bd0cff7a8ed and head_t_scale.bin 513024 B md5 7ba6154d8eed6d4410b241168a05fcfb,
+  made by pack_head_ternary.py (not in the repository: 82 MB, and *.bin is gitignored here).
+  Every "after" run is --head fabric --head-k 256, four threads, greedy, float32 KV cache.  --head arm is
+  STILL THE DEFAULT in the shipped source, so bitnet_chat.py, quality_board.py and runbench.py behave
+  exactly as they did and a board without /dev/udmabuf2 or head_t.bin still runs; the fabric head is one
+  flag away and flipping the default is a one-line change.
+
+NUMBERS: TOKENS A SECOND
+  THE FIVE BENCH PROMPTS, THREE TIMES EACH (prompts.json, context 512, one long-lived process, the
+  runtime's own prompt/generation milliseconds, which exclude setup; provebench.py; whole runs in
+  prove-bench.txt)
+    prompt      prompt ids  generated   prompt tok/s          generation tok/s
+                                        mean     min          mean    min
+    before, the pre-speed binary, run tonight on the shipped bitstream
+      france        13          8       16.10   16.07          9.33    9.25
+      sky           16         58       16.09   16.08          8.46    8.32
+      haiku         14         21       16.08   16.06          8.85    8.82
+      shiftreg      16        128       16.12   16.11          8.11    8.01
+      crc32         30         77       15.87   15.87          8.32    8.30
+      over the 15 runs: prompt mean 16.05, min 15.87; generation mean 8.61, min 8.01 tok/s
+      aggregate: 267 prompt tokens in 16.668 s = 16.02 tok/s; 876 generated in 105.394 s = 8.31 tok/s
+    after, today's runtime with the fabric head
+      france        13          8       17.40   17.37         17.13   17.08
+      sky           16         58       17.14   17.05         14.74   14.43
+      haiku         14         21       17.29   17.16         15.69   15.63
+      shiftreg      16        128       17.25   17.11         13.98   13.89
+      crc32         30         77       17.07   16.89         14.42   14.38
+      over the 15 runs: prompt mean 17.23, min 16.89; generation mean 15.19, min 13.89 tok/s
+      aggregate: 267 prompt tokens in 15.526 s = 17.20 tok/s; 876 generated in 60.712 s = 14.43 tok/s
+    "identical ids across repeats: True" for all five prompts in both columns.
+    kria-model-results.txt measured the same 15 runs on the pre-speed runtime AND the pre-speed bitstream
+    at 14.89 / 7.96 tok/s; the 16.02 / 8.31 above is that same binary tonight, which gains 7.6% of prompt
+    and 4.4% of generation from change 3 alone - its own per-forward line shows why, the four engine
+    phases falling from the 43.058 ms kria-model-results.txt recorded to 39.151 with nothing but the
+    bitstream different.  Both are quoted so the software and the fabric parts of the win are separable:
+    14.89 -> 16.02 -> 17.20 prompt and 7.96 -> 8.31 -> 14.43 generation.
+
+  THE WHOLE 31-PROMPT BATTERY (the 26 of quality_prompts.json with its system message and the 5 of
+  prompts.json, greedy, context 1024, one process a max_new group, exactly as headcheck.py runs it;
+  953 prompt tokens and 2097 generated)
+                          before                today, --head arm      today, --head fabric
+                          (pre-speed binary,    (the control that the  (what ships when the
+                           pre-speed bitstream)  ARM path still works)  flag is given)
+    prompt                 14.74 tok/s            16.97 tok/s            16.92 tok/s
+    generation              7.77 tok/s             8.58 tok/s            13.88 tok/s
+    prompt seconds         64.657                 56.158                 56.332
+    generation seconds    270.034                244.391                151.086
+    a prompt token         67.85 ms               58.93 ms               59.11 ms
+    a generated token     128.77 ms              116.54 ms               72.05 ms
+    head a call            52.309 ms              51.869 ms               7.161 ms
+    The middle column is the control: with the ARM head today's binary still pays 51.9 ms of head, so the
+    13.88 belongs to the head change and not to the rebuild; and its prompt rate is the whole of what
+    changes 2 and 3 give a prompt token, because prompt tokens make no head call at all.
+
+  AT 360 POSITIONS (bench-battery-q23_long.txt, 53 prompt ids and 307 generated, context 512)
+    before  prompt 53 tokens 3419.6 ms (15.50 tok/s), generated 307 42840.7 ms ( 7.17 tok/s)
+    after   prompt 53 tokens 3128.3 ms (16.94 tok/s), generated 307 25567.7 ms (12.01 tok/s)
+    307 ids each, all identical.  This is where the win is largest in milliseconds (139.5 -> 83.3 ms a
+    generated token) because attention, the one stage that grows with context, is also the stage change 2
+    improved most.
+
+NUMBERS: MILLISECONDS A FORWARD, weighted over every forward of the battery (3023 forwards, 2097 head
+calls each column; breakdown.py over the headcheck jsons)
+                                    before      today      today
+                                    (baseline)  --head arm --head fabric
+    engines qkv                       6.811       6.028       6.038
+    engines o                         3.979       3.679       3.678
+    engines gate+up                  22.061      19.768      19.775
+    engines down                     10.269       9.857       9.862
+    engines together                 43.120      39.332      39.353
+    activation loads                  1.088       1.083       1.085
+    glue pass A                       3.421       3.441       3.442
+    glue pass B                       3.408       3.428       3.427
+    shift scan                        2.877       2.945       2.930
+    sums out of the DMA buffer        2.249       1.069       1.075
+    attention                        10.186       7.399       7.477
+    norms, quant, RoPE, residuals     7.274       3.872       3.909
+    waiting on the side thread        0.120       0.092       0.100
+    forward total                    74.400      63.345      63.554
+    side thread busy, off the path    4.633       4.671       4.677
+    head a call                      52.309      51.869       7.161
+  A prompt token costs one forward; a generated token costs one forward and one head call, so 74.400 +
+  52.309 = 126.709 ms before and 63.554 + 7.161 = 70.715 after, against the measured 128.77 and 72.05
+  (the forward mean is weighted over all 3023 forwards and generated forwards sit at the higher end of
+  the context, exactly as kria-model-results.txt noted).
+  Of the 72.05 ms of a generated token today: the four engine phases 39.35 (54.6%), the head 7.16 (9.9%),
+  attention 7.48, the glue's two passes 6.87, the norms and their neighbours 3.91, the shift scan 2.93,
+  the sums 1.08, the activation loads 1.09.  The head was 41.7% of a generated token and is now 9.9%.
+
+  VERBATIM, THE SAME PROMPT BEFORE AND AFTER (bench:crc32, 30 prompt ids and 77 generated, so positions
+  30..107; both from tonight, rep 2 of three, in prove-bench.txt)
+    before  prompt 30 tokens 1890.6 ms (15.87 tok/s), generated 77 9273.6 ms (8.30 tok/s)
+      per forward over 106 (ms): engines qkv 6.029, o 3.675, gate+up 19.568, down 9.854 (39.126
+      together); activation loads 1.083; glue A 3.440 B 3.426; shift scan 2.782; sums out 2.108;
+      attention 7.807; norms, quant, RoPE and residuals 7.126; waiting on the side thread 0.117; forward
+      total 67.614. side thread busy 4.582 ms a forward (beats and the FFN scale, off the critical path).
+      head 51.869 ms a call over 77 calls
+    after   prompt 30 tokens 1747.3 ms (17.17 tok/s), generated 77 5327.8 ms (14.45 tok/s)
+      per forward over 106 (ms): engines qkv 6.039, o 3.677, gate+up 19.715, down 9.855 (39.286
+      together); activation loads 1.080; glue A 3.442 B 3.426; shift scan 2.911; sums out 0.978;
+      attention 5.762; norms, quant, RoPE and residuals 3.953; waiting on the side thread 0.071; forward
+      total 61.534. side thread busy 4.657 ms a forward (beats and the FFN scale, off the critical path).
+      head 7.118 ms a call over 77 calls
+  and at 309 positions (battery:q23_long, 53 prompt ids and 256 generated; the before is the pre-speed
+  binary on the pre-speed bitstream, from the baseline battery run)
+    before  prompt 53 tokens 3630.1 ms (14.60 tok/s), generated 256 35874.1 ms (7.14 tok/s)
+      per forward over 309 (ms): engines qkv 6.808, o 3.977, gate+up 22.045, down 10.259 (43.088
+      together); activation loads 1.095; glue A 3.423 B 3.407; shift scan 3.071; sums out 2.594;
+      attention 19.901; norms, quant, RoPE and residuals 7.531; waiting on the side thread 0.139; forward
+      total 84.958. side thread busy 4.672 ms a forward. head 51.725 ms a call over 256 calls
+    after   prompt 53 tokens 3140.7 ms (16.88 tok/s), generated 256 20699.7 ms (12.37 tok/s)
+      per forward over 309 (ms): engines qkv 6.030, o 3.688, gate+up 19.948, down 9.868 (39.533
+      together); activation loads 1.098; glue A 3.444 B 3.429; shift scan 3.068; sums out 1.406;
+      attention 14.178; norms, quant, RoPE and residuals 3.906; waiting on the side thread 0.149; forward
+      total 71.052. side thread busy 4.723 ms a forward. head 7.141 ms a call over 256 calls
+
+NUMBERS: THE HEAD'S TWO STAGES (weighted over the 2241 head calls that printed a stage line tonight)
+    stage 1, the ternary head streamed through the four engines   5.977 ms   82083840 B = 13.733 GB/s
+    its int8 activation load into the DMA buffer                  0.009
+    sync_for_cpu, scale by head_t_scale, top-256 on four threads  0.971
+    stage 2, the exact rescore of 256 rows of head_i8             0.197     256 x 2560 int8 = 655360 B
+    head total                                                    7.165 ms  (52.309 before, 7.30x)
+  The study projected 7.580 ms a call and the head agent measured 8.045 on the old bitstream (its stage 1
+  6.720 ms); the stream is 0.74 ms faster on the new one, and the call 0.88 ms.  --head-k moves it as the
+  study said it would: K=64 14.55 tok/s on
+  bench:crc32, K=256 14.45, K=1024 14.12, K=4096 13.08, and every one of those produced the same 77 ids.
+
+NUMBERS: WEIGHT BANDWIDTH AND MAC RATE (2 bits a weight, so N x K ternary weights are N K / 4 bytes; a
+layer streams 17367040 B and a token 521011200 B, which is model.bin whole)
+    phase          bytes a token    ms a forward        GB/s              G ternary MAC/s
+                                    before  after   before  after        before  after
+    qkv (3840)        73728000       6.811   6.038  10.825  12.211
+    o_proj            49152000       3.979   3.678  12.353  13.364
+    gate+up          265420800      22.061  19.775  12.031  13.422
+    down_proj        132710400      10.269   9.862  12.923  13.457
+    together         521011200      43.120  39.353  12.083  13.239        48.33   52.96
+    head stage 1      82083840          -    5.977      -   13.733
+    everything the fabric streams in a generated token: 603095040 B in 45.330 ms = 13.305 GB/s
+  2084044800 ternary multiply-accumulates a token at 52.96 G MAC/s, plus 328335360 more in the head's
+  stage 1.  The engines' own reference test on this bitstream, run again tonight: mean 0.333 ms over 2000
+  runs = 13.274 GB/s, min 13.585, and "runs with any mismatch: 0 of 2000".  The DDR agent measured the
+  whole DDR handing out about 14.0 GB/s to all masters together, so the fabric alone now takes 95% of it
+  and at most about 5% more is available from the memory path.
+
+THE PROOF THAT NO TOKEN ID CHANGED (all of it verbatim in prove-idcheck.txt; the runs are
+ids-prove-fabric.json, ids-prove-arm.json, prove-after.json, prove-baseline.json and prove-360-*.ids)
+  1. THE BATTERY AGAINST THE PRE-SPEED BASELINE - the central claim.  31 prompts (26 battery + 5 bench),
+     2097 generated ids, against the ids kept before any speed work was done:
+       python3 headcheck.py ids-prove-fabric.json --head fabric --exe ./bitnet_kria
+       python3 headcheck.py --compare baseline/ids-arm-baseline.json ids-prove-fabric.json
+         31 prompts, 2097 generated ids compared: ALL IDENTICAL
+     Every prompt's line says "N ids identical"; the longest is battery:q23_long at 256.
+  2. THE ARM CONTROL.  Today's binary with --head arm, the same battery, against the same baseline:
+       python3 headcheck.py ids-prove-arm.json --head arm --exe ./bitnet_kria
+       python3 headcheck.py --compare baseline/ids-arm-baseline.json ids-prove-arm.json
+         31 prompts, 2097 generated ids compared: ALL IDENTICAL
+     and the two heads against each other: ALL IDENTICAL.  So changes 2 and 3 did not move an id on the
+     old code path either, and the fabric head agrees with the exact int8 head on all 2097.
+  3. THE THREE EARLIER AGENTS' BATTERY RUNS, each compared with tonight's: ids-fabric-k256.json
+     (head agent), ids-overlap-f32.json (overlap agent) and ids-fabric-sw.json (fabric agent) -
+     31 prompts, 2097 generated ids compared: ALL IDENTICAL, all three.
+  4. THE FIVE BENCH PROMPTS, THREE TIMES EACH, the pre-speed BINARY run tonight against today's:
+       python3 provebench.py --compare prove-baseline.json prove-after.json
+         15 runs, 876 generated ids compared: ALL IDENTICAL
+     and within each column "identical ids across repeats: True" for all five prompts, so the runtime is
+     deterministic run to run as well as version to version.
+  5. THE 360-POSITION RUN, the longest context measured, both binaries tonight:
+       sudo ./baseline/bitnet_kria --max-new 307 --context 512 --threads 4 --timing --quiet < bench-battery-q23_long.txt
+       sudo ./bitnet_kria --max-new 307 --context 512 --threads 4 --head fabric --timing --quiet < bench-battery-q23_long.txt
+         prove-360-before.ids and prove-360-after.ids: all 307 ids identical
+  6. THE FLAGS, each against ids-prove-fabric.json (flagcheck.py):
+       bench:crc32 --threads 1     77 ids IDENTICAL   11.73 tok/s
+       bench:crc32 --threads 2     77 ids IDENTICAL   13.75
+       bench:crc32 --head-k 64     77 ids IDENTICAL   14.55
+       bench:crc32 --head-k 1024   77 ids IDENTICAL   14.12
+       bench:crc32 --head-k 4096   77 ids IDENTICAL   13.08
+       bench:crc32 --head arm      77 ids IDENTICAL    8.84   (flagcheck's own line says "no extra
+                                                              flags" because arm is passed as --head)
+       battery:q23_long --threads 1  256 ids IDENTICAL  8.94
+     One thread matters: the pool and the side thread then run inline, so anything the overlap changed
+     about ordering would show here.
+  7. THE REFERENCE DUMP, both head modes (rc 0 both times; prove-stagecheck.txt is the fabric run):
+       sudo ./bitnet_kria --stage-check refdump/stages.bin --head fabric --timing
+       sudo ./bitnet_kria --stage-check refdump/stages.bin --head arm
+         stage check: every integer stage exact, every float stage above its cosine floor, every top-1
+         the reference's
+     104 lines of "differ      0 exact" in each = 13 integer arrays (l0_xq, l0_qi, l0_ki, l0_vi, l0_aq,
+     l0_oi, l0_x2q, l0_g, l0_u, l0_shifts, l0_h, l0_q8, l0_d) at each of 8 dumped positions through all
+     30 layers; not one line in either run says NOT EXACT, DIFFERS or BELOW THE FLOOR; and at all 8
+     positions "two-stage  fabric argmax N, exact head N  same".  At position 7, verbatim:
+       final_norm       2560 float   outside 1e-04+1e-04|ref|   2420   max|diff| 0.00766     of max|ref| 0.5271      cosine 0.999440460  ok
+       logits         128256 float   max|diff| 0.5261   cosine 0.999891269
+       top-1          argmax 5380, reference 5380  same
+     - the same three lines, to the digit, that kria-model-results.txt recorded for the pre-speed
+     runtime, so the model's agreement with the numpy reference has not moved either.
+  8. THE FABRIC AGAINST ITS OWN REFERENCE VECTORS, on the shipped bitstream, tonight:
+       ternary_matvec, 2000 runs on 4 engines: "runs with any mismatch: 0 of 2000"
+       ternary_ffn, 4 tokens x 5 runs: "runs with any mismatch 0 of 20", "every value matched the
+       reference in every run" - so the glue and its Oracle-grown mul16 multipliers are exact too.
+  WHAT THIS DOES AND DOES NOT PROVE.  It proves that on 31 prompts, three repeats of five of them, one
+  360-position run, seven flag settings and the reference dump's 8 positions, this runtime emits exactly
+  the token stream the pre-speed runtime emitted.  It does not prove the ternary shortlist is exact for
+  every possible hidden state: the study could not certify it (the Cauchy-Schwarz bound leaves all 128256
+  rows in the shortlist, about sqrt(2560) too loose), so the shortlist is exact BY MEASUREMENT.  Its
+  measured margin is large - worst rank 56 of a K of 256 over 2115 real head states, 49-60 on states
+  perturbed to the board's own measured drift - and stage 2 re-checks the top 256 exactly on every call,
+  so a miss would need the true argmax to fall outside a shortlist that has never been within 4.5x of
+  failing.  The one case the study says K = 256 is NOT enough for is scoring EVERY position rather than
+  only generated ones (teacher forcing, perplexity): there the same rule needs K in the hundreds to
+  thousands.  Anyone who adds such a mode must raise --head-k or use --head arm.
+
+POWER (board/power-bitnet.sh with board/ina260-sample.py at 50 ms; whole summaries in prove-power.txt,
+sample logs on the board.  The same 25-token prompt and 256 generated tokens at context 512 that
+kria-model-results.txt used, both binaries measured back to back tonight)
+    before (pre-speed binary)                  after (today, --head fabric)
+      1 idle-before  3.548 W                     1 idle-before  3.549 W
+      2 setup        4.193 W                     2 setup        4.203 W
+      3 prompt       5.506 W over  1.623 s       3 prompt       5.632 W over  1.490 s
+      4 generation   5.601 W over 34.390 s       4 generation   5.638 W over 20.286 s
+      6 idle-after   3.548 W                     6 idle-after   3.547 W
+      prompt 25 tokens 1571.2 ms (15.91 tok/s)   prompt 25 tokens 1480.2 ms (16.89 tok/s)
+      generated 256 34443.5 ms (7.43 tok/s)      generated 256 20293.8 ms (12.61 tok/s)
+  Energy a token, the INA260 seeing the whole board:
+    a generated token   0.7524 J -> 0.4468 J   (-40.6%);  over the 3.548 W idle 0.2758 -> 0.1656 J (-40.0%)
+    a prompt token      0.3574 J -> 0.3357 J   ( -6.1%);  over idle 0.1271 -> 0.1242 J
+  The board draws 0.04 W more while it works and finishes 41% sooner.  Unlike the earlier phases, where
+  the energy saving over idle was a wash, this one is real over idle as well: the head change removed
+  work, it did not merely move it.  Idle is 3.547-3.549 W with this bitstream loaded (3.48 W with the
+  old one; the wider DMA write ports cost about 0.07 W at rest).  Temperatures around the runs: PS
+  26.97-30.29 C, PL 26.36-26.87 C; nothing throttled.
+
+BITNET.CPP ON THE SAME BOARD, THE SAME QUESTION, LIKE FOR LIKE (board/power-bitnetcpp.sh;
+llama-completion, the i2_s GGUF, 4 threads, --temp 0, -n 80, the same bitnet_chat.jinja template, no
+system message on either side; the board runs the same 16 prompt ids with -n 80.  Warm run; the cold one
+is kept too.  Segmented by llama's own reported milliseconds with llamaseg.py)
+    phase              bitnet.cpp                        bitnet_kria (fabric head)
+    idle               3.530 W                           3.547 W
+    start and load     3.780 W over 18.3 s (load 3.43 s) 4.294 W over 1.56 s of setup
+    prompt eval        5.024 W over  3.791 s, 17 tokens  5.741 W over 0.935 s, 16 tokens
+    generation         5.164 W over 29.007 s, 79 tokens  5.788 W over 5.529 s, 80 tokens
+    max RSS            1386612 kB                        412468 kB
+    generation         2.72 tok/s, 1.896 J a token       14.45 tok/s, 0.400 J a token
+    prompt             4.48 tok/s, 1.120 J a token       17.32 tok/s, 0.336 J a token
+  Generation: 5.31x the rate at 4.74x fewer joules a token (3.87x counting only the increment over idle).
+  Prompt: 3.87x the rate at 3.34x fewer joules a token.  kria-model-results.txt measured this same
+  comparison at 2.91x the generation rate before the speed work; the fabric head is where the rest came
+  from.  bitnet.cpp itself is unchanged and reproduces its own numbers: 4.48 / 2.72 tok/s tonight against
+  4.46 / 2.76 then.
+
+MEMORY
+  Maximum resident set size, /usr/bin/time -v on bench:crc32 at context 512: 412468 kB, against the
+  pre-speed 342808 kB.  The 68 MB more is the KV cache being pre-faulted at startup (change 2), which is
+  a cost paid once and taken off the token loop; it is bounded by --context, which it was not before.
+  bitnet.cpp on the same question: 1386612 kB, 3.4x more.
+  Setup 1.55 s warm (model.bin read into udmabuf0 at 480 MB/s in 1.08 s, head_t.bin into udmabuf2 at
+  478 MB/s in 0.17 s, 331 MB of head weights, scales and norms mlocked in 0.20 s).
+  CmaFree 14852 kB of CmaTotal 1024000 with all three buffers allocated: 80 MiB for the ternary head fits,
+  and nothing larger would.
+
+WHAT IS LEFT, AND WHAT THE NEXT CEILING IS
+  Of a 72.05 ms generated token: the engines 39.35 (54.6%), attention 7.48 (7.5 at the battery's average
+  context, 14.2 at 309 positions, 16.2 at 360), the head 7.16, the glue 6.87, the norms 3.91, the shift
+  scan 2.93, the sums 1.08, the activation loads 1.09.
+  1. THE ENGINES, 39.35 ms, more than half the token, at 13.24 GB/s of a DDR that was measured to hand
+     out about 14.0 GB/s to all masters together.  Reads cannot go much further: the burst and the port
+     arrangement were both tried and neither helped (kria-ddr-results.txt).  The only real lever left is
+     FEWER BYTES: five trits a byte in base 3 (1.6 bits a weight instead of 2) would take a token's
+     521.0 MB to 417.6 MB.  PROJECTION at the measured 13.33 GB/s: engines 39.6 -> 31.7 ms, head stage 1
+     5.98 -> 4.8, a generated token 72.0 -> 63.0 ms, generation 13.9 -> 15.9 tok/s.  It is exact by
+     construction (the same weights, the same integer sums) but it costs a 256-entry decode table a byte
+     in the engine, 80 lanes, a repacked model.bin and head_t.bin, a runtime that knows the new beat
+     counts, a bitstream rebuild and a full revalidation.  NOT BUILT; a projection only.
+  2. ATTENTION at long context: the value accumulate, 3.26 cycles a MAC, is now the larger half and three
+     forms of it were measured and rejected (kria-overlap-results.txt).  Going further means fewer bytes
+     in the KV cache, and bf16 changes 19 of 31 prompts' ids - so it is a different model, not a speed
+     win.  float32 stays.
+  3. THE GLUE, 6.87 ms a token for two passes over 6912 elements = 123 fabric clocks an element.  That is
+     the grown mul16's serial multiplier; making it a few clocks wide is a fabric change with the whole
+     revalidation behind it.
+  4. THE SHIFT SCAN, 2.93 ms, four sequential passes over 6912 words on one thread; splitting it over the
+     pool is possible now that a dispatch is a spin, and was not tried.
+  5. THE TWO HALVES CANNOT BE FILLED FURTHER WITHIN A TOKEN.  The side thread carries 4.68 ms a forward
+     off the critical path and the main thread waits 0.100 ms on it.  Every remaining arrow in the chain
+     is a true dependency, and the stage-2 rescore in particular cannot overlap the next forward because
+     it is what names the next token.  Filling both halves needs two tokens in flight - speculative
+     decoding or a batch - and that is a different model or a second sequence, not a speed change to this
+     runtime.
+
+FILES
+  board/bitnet_kria.c                                      the runtime; --head arm|fabric, --head-k, --cache-dtype
+  board/build-ffn.tcl                                      the block design; S2MM burst 256 and 128-bit write port
+  board/ffn.bit.bin                                        the shipped bitstream, md5 10a64c4deb2d147b7ebc6160e4923ae1
+                                                           (gitignored: /board/*.bit.bin; build-ffn.tcl remakes it)
+  board/power-bitnet.sh, board/power-bitnetcpp.sh          the power runs (EXE, FLAGS, IDS, NEW, CTX)
+  board/research/ternary/bitnet/provebench.py              the five bench prompts x N through a chosen binary and head mode
+  board/research/ternary/bitnet/breakdown.py              the weighted per-forward table from any headcheck/provebench json
+  board/research/ternary/bitnet/llamaseg.py               cuts a bitnet.cpp power trace into load, prompt and generation
+  board/research/ternary/bitnet/headcheck.py              the battery through one head mode; --compare, --numbers
+  board/research/ternary/bitnet/flagcheck.py              one prompt under given flags, ids against a json
+  board/research/ternary/bitnet/pack_head_ternary.py      makes head_t.bin and head_t_scale.bin
+  board/research/ternary/bitnet/prove-idcheck.txt         the nine id comparisons and the flag runs, verbatim
+  board/research/ternary/bitnet/prove-stagecheck.txt      the --stage-check run, verbatim
+  board/research/ternary/bitnet/prove-bench.txt           the 30 bench runs and the 360-position pair, verbatim
+  board/research/ternary/bitnet/prove-power.txt           the four power runs and the energy table, verbatim
+  board/research/ternary/bitnet/prove-ids-fabric.json     the battery run these ids were checked from (31 prompts)
+  board/research/ternary/bitnet/prove-ids-arm.json        the same battery through the ARM head, the control
+  board/research/ternary/bitnet/prove-ids-bench-after.json    the 15 bench runs of today's runtime
+  board/research/ternary/bitnet/prove-ids-bench-before.json   the 15 bench runs of the pre-speed binary
+  board/research/ternary/bitnet/kria-speed-results.txt    this file
+  board/research/ternary/bitnet/kria-head-results.txt     change 1, the two-stage head
+  board/research/ternary/bitnet/kria-overlap-results.txt  change 2, the A53 side
+  board/research/ternary/bitnet/kria-ddr-results.txt      change 3, the DMA write path
+  board/research/ternary/bitnet/kria-model-results.txt    the pre-speed runtime this is measured against
+  on the board: /home/ubuntu/bitnet-kria/{bitnet_kria, head_t.bin, head_t_scale.bin, ids-prove-fabric.json,
+  ids-prove-arm.json, prove-after.json, prove-baseline.json, prove-360-{before,after}.{txt,ids},
+  prove-idcheck.txt, prove-stagecheck-{fabric,arm}.txt, prove-bench.txt, power-prove-*.log,
+  baseline/bitnet_kria, baseline/ids-arm-baseline.json}
+
+HOW TO REPRODUCE, on the board
+  gcc -O3 -Wall -Wextra -std=c11 -march=armv8-a+crc -ffp-contract=off -o bitnet_kria bitnet_kria.c -lm -lpthread
+  python3 provebench.py --exe baseline/bitnet_kria --no-head-flag --repeats 3 --out prove-baseline.json
+  python3 provebench.py --exe ./bitnet_kria --head fabric --repeats 3 --out prove-after.json
+  python3 provebench.py --compare prove-baseline.json prove-after.json
+  python3 headcheck.py ids-prove-fabric.json --head fabric --exe ./bitnet_kria
+  python3 headcheck.py --compare baseline/ids-arm-baseline.json ids-prove-fabric.json
+  python3 headcheck.py ids-prove-arm.json --head arm --exe ./bitnet_kria
+  python3 breakdown.py baseline/ids-arm-baseline.json ids-prove-arm.json ids-prove-fabric.json
+  python3 flagcheck.py ids-prove-fabric.json bench:crc32 --exe ./bitnet_kria -- --threads 1
+  sudo ./bitnet_kria --stage-check refdump/stages.bin --head fabric --timing
+  sudo env EXE=./bitnet_kria FLAGS='--head fabric' NEW=256 CTX=512 ./power-bitnet.sh
+  sudo env NEW=80 THREADS=4 ./power-bitnetcpp.sh && python3 llamaseg.py ~/bitnet/bitnetcpp-power.log ~/bitnet/bitnetcpp-power-run.err
+  cd ~/matvec && sudo taskset -c 0 ./ternary_matvec --engines 4 --gpio 0xA0000000 --dma 0xA0040000 --runs 2000 --show 0
+  cd ~/ffn && sudo ./ternary_ffn --tokens 4 --runs 5
