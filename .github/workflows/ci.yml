@@ -42,6 +42,16 @@ jobs:
       - name: no comments in any code file
         run: python tools/no_comments.py
 
+      - name: every script the docs tell people to run is executable
+        run: |
+          set -eu
+          fail=0
+          for f in $(git ls-files '*.sh'); do
+            mode=$(git ls-files -s "$f" | cut -d' ' -f1)
+            [ "$mode" = 100755 ] || { echo "*** $f is $mode, not 100755: ./$f would be permission denied on a fresh clone"; fail=1; }
+          done
+          exit $fail
+
       - name: the tree refers to nothing outside itself
         run: |
           set -eu
