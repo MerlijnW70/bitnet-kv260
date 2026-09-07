@@ -200,23 +200,28 @@ are new. Each says so in its own output.
 - the `apt-get` line;
 - the kernel-command-line edit — which is why `setup.sh --bootargs` **prints** what to change and
   refuses to edit it;
-- **the whole Kria app path**, which is `README.md` step 3: `firmware/install-firmware.sh`,
-  `xmutil loadapp kv260-bitnet`, and the `/lib/firmware/xilinx/kv260-bitnet/` layout. Every number
-  in this repository was measured through the `fpgautil` path that `setup.sh --fabric` uses. The
-  installer refuses to install when the overlay's `firmware-name` stops matching the bitstream's
-  file name, and `--verify` reads `fpga0` and `pl0_ref` afterwards, precisely because nothing here
-  has proved that door. If it misbehaves, `sudo ./setup.sh --fabric` loads the same two files with
-  `fpgautil` instead;
 - fetching any weight file from any address: the reference board's copy arrived over `rsync` from a
   PC that had packed it.
+
+**The Kria app path is no longer untested.** `README.md` step 3 was run on the reference board:
+`firmware/install-firmware.sh` installed the three files, `xmutil listapps` listed `kv260-bitnet`,
+`xmutil loadapp kv260-bitnet` reported `loaded to slot 0`, `--verify` read `operating` and
+`pl0_ref 249999998`, a generation answered correctly, and `bitnet_kria --stage-check` returned every
+integer stage exact and every top-1 the reference's. Two things came out of that run and are written
+up in [troubleshooting.md](troubleshooting.md): `xmutil unloadapp` cannot remove an overlay that
+`fpgautil` created, so `sudo fpgautil -R` first if the fabric was loaded the other way; and this
+image has no `dfx-mgrd.service`, yet `loadapp` works. Every speed figure in `results/` was still
+measured over the `fpgautil` path; both load the same two files and set the same clock.
 
 **Two changes were made to the code that came from the research repository**, both because the
 friction of shipping exposed them: `bitnet_chat.py` and `edge_monitor.py` gained a `--head` option
 defaulting to `auto`. Before that neither front end could reach the fabric output head, so the
 documented first-token command ran the ARM head at roughly half the advertised generation rate with
 nothing to say why. The runtime already accepted `--head fabric`; only the front ends could not pass
-it. That change has not been run on the board either, and it is the difference between about 8 and
-about 16.8 generated tokens a second.
+it. That change has now been run on the board: the repository's own `bitnet_chat.py`, at its default
+`--head auto`, answered at 20.02 generated tokens a second where the board's older copy without the
+option gave 10.29 on the same prompt through the same fabric. Those two figures are one short prompt
+each, not a benchmark; `results/` holds the measured rates.
 
 ## What is known to be fiddly
 

@@ -199,9 +199,32 @@ already packed, and `prep.sh` continues either way.
 
 ## `xmutil loadapp` misbehaves
 
-**The Kria app path in `firmware/install-firmware.sh` has never been run on the reference board:**
-every number in this repository was measured with the `fpgautil` path that `setup.sh --fabric` uses,
-and the installer checks `pl0_ref` afterwards exactly because nothing here has proved that path.
+The Kria app path has been run on the reference board and works: the installer put the three files
+in place, `xmutil listapps` listed `kv260-bitnet`, `xmutil loadapp kv260-bitnet` reported `loaded to
+slot 0`, `pl0_ref` read 249999998, a generation answered correctly, and `bitnet_kria --stage-check`
+came back with every integer stage exact and every top-1 the reference's. The speed figures in
+`results/` were all taken over the `fpgautil` path that `setup.sh --fabric` uses; both paths load the
+same two files and set the same clock.
+
+**One thing will go wrong if the fabric is already loaded the other way.** `xmutil unloadapp` cannot
+remove an overlay that `fpgautil` created, and `loadapp` then fails on the occupied slot:
+
+```
+remove from slot 0 returns: -1 (Error)
+kv260-bitnet: load Error: -1
+```
+
+The overlay to look for is `full` in `/sys/kernel/config/device-tree/overlays/`, which is the name
+`fpgautil` uses. Clear it with `fpgautil` and load again:
+
+```sh
+sudo fpgautil -R
+sudo xmutil loadapp kv260-bitnet
+```
+
+On the reference image there is no `dfx-mgrd.service` — `systemctl start dfx-mgrd` reports
+`Unit dfx-mgrd.service not found` — and `xmutil loadapp` works anyway. Do not go looking for that
+service if the load succeeds.
 
 The installer compiles the overlay on the board — the `.dtbo` is not in this repository, because the
 blob has to match the device tree of the board it is loaded into — and installs the three files
