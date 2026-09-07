@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: A question, an idea, or something you built with it
+    url: https://github.com/MerlijnW70/bitnet-kv260/discussions
+    about: Discussions, not issues. Issues are for something that does not work.
+  - name: Something sensitive
+    url: https://github.com/MerlijnW70/bitnet-kv260/security/advisories/new
+    about: Private vulnerability reporting. Nothing is published until there is a fix.
+  - name: The weights
+    url: https://huggingface.co/merlijn70w/bitnet-kv260-weights
+    about: The 1.4 GB of packed model files the setup script downloads.

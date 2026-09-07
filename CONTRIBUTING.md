@@ -74,6 +74,19 @@ from a real run, with the command that produced them. Mark a projection as a pro
 **Say what is untested.** Several scripts print `[UNVERIFIED]` where they run a step no one has run
 on a real board. If you verify one, delete the marker and say in the pull request what you ran.
 
+## Where to say it
+
+There is no contact email, on purpose: an address in a public repository is scraped within days,
+and everything one would be used for has a better home here.
+
+- Something does not work: an [issue](https://github.com/MerlijnW70/bitnet-kv260/issues). The
+  template asks for the `doctor.sh` output because most reports are settled by it.
+- A question, an idea, or something you built with it: a
+  [discussion](https://github.com/MerlijnW70/bitnet-kv260/discussions).
+- Something sensitive: **Security → Report a vulnerability**, which is private until there is a fix.
+  [SECURITY.md](SECURITY.md) says what is in scope; note that the runtime maps physical memory and
+  runs as root.
+
 ## Pull requests
 
 CI runs the RTL testbenches, compiles every Python and shell file, parses every JSON, and enforces

@@ -5,6 +5,15 @@ bitnet-kv260 -- microsoft/bitnet-b1.58-2B-4T, all 30 layers, on a Xilinx Kria KV
 ternary matrix product streamed through four engines in the FPGA fabric and attention, the norms
 and the exact top-K rescore on the four Cortex-A53 cores.
 
+SCOPE
+-----
+
+The Apache License 2.0 in LICENSE covers the original work in this repository: the Verilog, the
+testbenches, the C, the Python, the Tcl, the shell scripts and the documentation.
+
+It does NOT cover the pre-built bitstream firmware/kv260-bitnet.bit.bin, and it does NOT cover any
+model weights, which this repository does not redistribute at all. Both are covered below.
+
 Copyright 2026 Merlijn W
 
 The original work in this repository -- the Verilog, the testbenches, the C, the Python, the Tcl,
