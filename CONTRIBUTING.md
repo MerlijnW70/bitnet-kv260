@@ -6,9 +6,12 @@ the rule the whole project is built on.
 ## The rule: the tokens must not change
 
 Every optimisation in `results/` was accepted only after proving that the model's output did not
-move. Three passes made it 1.8 times faster and not one generated token id changed. Two changes that
-were faster were **rejected** for breaking it: an int8 KV cache altered 15 prompts and a bf16 one
-altered 19.
+move. Three passes took generation from 8.31 to 16.78 tok/s, **2.0 times faster**, and not one
+generated token id changed. Two changes that were faster were **rejected** for breaking it: an int8
+KV cache and a bf16 one, each of which altered the output on more than a dozen of the 31 battery
+prompts. Both numbers come from `results/kria-speed-results.txt` and
+`results/kria-speed2-results.txt`, which record each pass measured back to back on the board; the
+per-pass figures are 1.74x and 1.17x.
 
 So: **if your change touches the arithmetic, greedy output must stay byte-identical**, and the
 repository ships the means to prove it.
