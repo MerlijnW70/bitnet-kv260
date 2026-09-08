@@ -1,6 +1,7 @@
-"""The reference for BitNet b1.58 2B4T's layer 0 MLP on the KV260: the exact integer products
-oracle's grids and the ternary engines must reproduce, BitNet's activation quantisation that
-feeds them, and the integer FFN (ffn_int) that the glue block and the driver are checked against.
+"""The reference for BitNet b1.58 2B4T's layer 0 MLP on the KV260: the exact integer products the
+grids in hardware/grown/ and the ternary engines must reproduce, BitNet's activation quantisation
+that feeds them, and the integer FFN (ffn_int) that the glue block and the driver are checked
+against.
 
 usage: python reference.py            self-test against numpy's int64 dot and a scalar loop
 

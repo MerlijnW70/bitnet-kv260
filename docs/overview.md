@@ -129,8 +129,8 @@ passes, so a 100 MHz fabric can never be mistaken for a slow board in a self-tes
 2. **The RTL** (`--rtl`), with Icarus Verilog, needing no board and no weights:
    `tb_ternary_matvec` must print `checked 352 values, 0 wrong, 0 protocol faults` and
    `tb_ternary_glue` must print `checked 58273 elements, 0 wrong, 0 protocol faults`. The engine's
-   testbench takes seconds; the glue's took over ten minutes here, because `mul16.v` is 375 kB of
-   gate-level multiplier.
+   testbench takes seconds; the glue's took over ten minutes here, because `mul16.v` is 370 kB of
+   gate-level multiplier simulated gate by gate.
 3. **The stage check** — `bitnet_kria --stage-check` against `refdump/stages.bin` from the numpy
    reference: all 30 layers at 8 prompt positions, with the 13 integer arrays required to be exact
    at every one. On a correct board it ends:
@@ -175,6 +175,12 @@ from commands recorded working.
   apart from the vector paths and the comments stripped for publication;
 - `hardware/gen_matvec_vectors.py` and `hardware/gen_glue_vectors.py`, which regenerate
   `hardware/vectors/` **byte for byte identically** to what is committed;
+- `hardware/grown/verify_pieces.py`, which re-derives each exam's own 65,536 confirm rows and runs
+  the sixteen grids `hardware/mul16.v`'s partial products were built from against them:
+  `16 of 16 pieces whole on every confirm row`, 1,048,576 cases and 33,554,432 answer bits, in
+  under two seconds and with nothing but the Python standard library. Its negative tests were run
+  too: one flipped cell is caught, and erasing any one of the 494 kept gates in turn is caught all
+  494 times;
 - the self-test's golden data: the six prompts' recorded ids agree across four independent recorded
   runs of the reference board, and their prompt ids were re-derived here from the prompt text
   through `runtime/bitnet_chat.py`'s own template and the checkpoint's `tokenizer.json`;
@@ -289,6 +295,9 @@ with nothing on the wire, it does the job.
 firmware/     the bitstream, its device-tree overlay, shell.json, and the Kria app installer
 hardware/     the Verilog, the two testbenches with their vectors, the Vivado build script,
               and the utilisation and timing reports the resource claims come from
+     grown/   the grids mul16.v's sixteen partial-product pieces were built from, the exam files
+              that state what each was asked for, the attempt that failed, and a standalone
+              verifier that runs all sixteen against 65,536 rows each of their truth tables
 runtime/      bitnet_kria.c (the token loop), the chat front end, the edge demo, the power scripts
 tools/        the packers, the numpy reference, the quality and benchmark harnesses, prep.sh
 selftest/     the recorded token ids and the script that checks them
@@ -306,6 +315,8 @@ setup.sh doctor.sh selftest.sh chat.sh
   to repack.
 - [docs/troubleshooting.md](troubleshooting.md) — one section per way this goes wrong.
 - [docs/build-bitstream.md](build-bitstream.md) — rebuilding in Vivado. **Optional.**
+- [hardware/grown/README.md](../hardware/grown/README.md) — where `mul16.v`'s multipliers came
+  from, what was planned and what was searched for, and how to check it yourself.
 - [ENVIRONMENT.md](../ENVIRONMENT.md) — the one configuration this was measured on.
 
 ## What this is not

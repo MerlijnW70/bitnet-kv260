@@ -34,12 +34,24 @@ sudo apt-get install iverilog python3-numpy
 ```
 
 That elaborates the RTL and runs both testbenches against recorded vectors: the matvec engine at
-batch 1 to 4 with K of 2560 and 6912, and the FFN glue around the grown multipliers. The matvec
+batch 1 to 4 with K of 2560 and 6912, and the FFN glue around the `mul16.v` multipliers. The matvec
 bench takes seconds. The glue bench takes over ten minutes, because it simulates 16x16 bit-serial
 multipliers gate by gate.
 
 Regenerating the test vectors needs the checkpoint weights; the recorded ones in `hardware/vectors/`
 do not, which is why they are committed.
+
+The cheapest check here needs no board, no iverilog and not even numpy:
+
+```sh
+python3 hardware/grown/verify_pieces.py
+```
+
+Two seconds, the standard library only. It runs the sixteen grids `mul16.v`'s partial products were
+built from against 65,536 rows each of their truth tables. `hardware/grown/README.md` says where
+those grids came from — planned by construction, then seeded into an evolutionary search that kept
+them only when exact and pruned what carried nothing — and what happened when the search was given
+no seed at all.
 
 ## Working with a board
 

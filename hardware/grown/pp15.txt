@@ -1,0 +1,22 @@
+# The partial product x(k-15) AND y_15 of a 16-bit serial multiplier, laid by construction
+# in board/research/ternary/ppplan.py: x on row 0 and y on row 1 a bit a step, least significant
+# first, a one-hot step chain and an x delay chain of 15 state rows each, a latch of y_15 set
+# by the pulse of step 15, and the product on the lane row 61 at step k, 16 steps of word
+# and 16 of hold. 45 gates, whole on the host model over corners and random operand pairs.
+inputs 32
+outputs 32
+rows 64
+columns 12
+steps 16
+state 59
+hold 16
+fold 1 below
+gates sum maj not up down leap hop
+colony 4096
+renew 32
+sample 256
+confirm 65536
+packed
+lean wires
+seed 4343
+serial pp 15

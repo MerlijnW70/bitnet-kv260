@@ -62,7 +62,7 @@ cd hardware
 ```
 
 Icarus Verilog, no licence, no board. The engine testbench takes seconds; the glue's took over ten
-minutes here, because `mul16.v` is 375 kB of gate-level multiplier and the glue runs 6912 elements
+minutes here, because `mul16.v` is 370 kB of gate-level multiplier and the glue runs 6912 elements
 twice. They must print:
 
 ```

@@ -65,21 +65,72 @@ their input width are streamed as one run:
 | 3 | gate, up | 13824 (3456 an engine) | 32 |
 | 4 | down | 2560 (640 an engine) | 87 |
 
-## The FFN glue, and the multipliers that were grown
+## The FFN glue, and where the multipliers came from
 
 The FFN's integer path needs four real multiplies per element — squaring the gated value, then two
 scalings, then the output quantisation — with five shift amounts the A53 searches for each token.
 `hardware/ternary_glue.v` does them in the fabric, one element a beat in pass A and four a beat in
 pass B, keeping the running maximum the output scale needs.
 
-The 16×16 multipliers those four multiplies use, `hardware/mul16.v`, were **not written by hand**.
-They were grown by an evolutionary circuit compiler — sixteen partial-product pieces and fifteen
-serial adders that it kept, composed into a bit-serial multiplier. 375 kB of gate-level Verilog with
-no DSP, no vendor primitive, and no hand-written arithmetic. `tb_ternary_glue.v` checks 58,273
-elements against the numpy reference through them.
+The 16×16 multipliers those four multiplies use, `hardware/mul16.v`, were **not written by hand**:
+370 kB of gate-level Verilog — sixteen partial-product pieces summed by a four-level tree of fifteen
+serial adders — with no DSP and no vendor primitive. In its 12,284 lines there is no `*` at all, and
+the only seventeen `+` are the step counters that say which clock each module is on; every bit of
+the arithmetic itself is gates. They came out of an evolutionary circuit compiler, and what that
+means here is narrower than the phrase usually suggests. The grids are published in
+[hardware/grown/](../hardware/grown/) so it can be read rather than believed. Four things happened,
+in this order:
 
-That is a curiosity, not a claim: the design uses 0 of the KV260's 1248 DSPs, but that is because
-the multiplies are small and serial, not because the grown multiplier beats a DSP.
+1. **A deterministic planner laid every piece out.** `hardware/grown/ppplan.py` places each gate of
+   a partial-product piece by construction — a one-hot step chain, a delay chain for `x`, a latch
+   for the one bit `y_i`, one `maj` on the lane — moving operands to the rows a gate can read by
+   shortest paths. Its output is `pp00.grid`..`pp15.grid`. That is a plan. Nothing is searched.
+2. **That plan was the search's starting population.** Every kept piece's exam file carries
+   `start expeditions/mul/pp<NN>.grid 4096`: 4,096 copies of the planned grid were the colony the
+   compiler began from.
+3. **A candidate was kept only if it was exactly right, and was then pruned.** The exams say
+   `confirm 65536`: 65,536 rows drawn from across the piece's 2^32-row truth table, and every one of
+   the 32 answer bits must be right on every one of those rows or the candidate is not kept.
+   `lean wires` then prunes any gate that does not carry the answer. Three of the sixteen pieces
+   came back leaner than the plan — 499 planned gates against 494 kept; the other thirteen came back
+   as they went in.
+4. **Unseeded, it did not converge.** `hardware/grown/tiny.txt` asks for a 2-bit serial multiplier —
+   16 cases, 64 answer bits, the whole table — with no `start` line. On that seed the search reached
+   62 of the 64 bits and never closed the gap. The nine-gate serial adder the tree is built from was
+   not grown either: it was laid out by hand and seeded the same way, because from nothing the
+   search reached about half of its table.
+
+   **The evidence for this step is weaker than for the other three, and that should be said.** The
+   64-bit and half-a-table figures are recorded in the header of `tiny.txt` by whoever ran it. There
+   is no run log here to check them against, and the serial adder's own exam and grid are not
+   published at all. Everything above this point can be re-verified from the files in
+   `hardware/grown/`; this cannot.
+
+So the honest summary is: **the layout was planned by construction, an evolutionary search checked
+it on 65,536 rows of each piece's table and pruned it, and unseeded search did not solve even a
+2-bit multiplier.** The checking and the pruning are real, and unusual. The layout is not the
+search's. And 65,536 rows is not the whole 2^32-row table: it is 1 row in 65,536, drawn from across
+it, which is a strong check and not a proof.
+
+The check is standalone and takes two seconds:
+
+```sh
+python3 hardware/grown/verify_pieces.py
+```
+
+It re-derives each exam's own 65,536 confirm rows — drawn by splitmix64 from across the whole table,
+not a low corner of it — and runs all of them at once, needing nothing but the Python standard
+library: `16 of 16 pieces whole on every confirm row`, 1,048,576 cases and 33,554,432 answer bits.
+It fails when a grid is wrong. Erase one of the 494 kept gates, one at a time, and every one of the
+494 is caught; that is what `lean wires` bought, and it means there is no gate in these grids to
+spare. [hardware/grown/README.md](../hardware/grown/README.md) has the grid format, an annotated
+exam, both negative tests and a per-piece table.
+
+`tb_ternary_glue.v` then checks 58,273 elements against the numpy reference through the composed
+multipliers, gate by gate, which is why that testbench takes over ten minutes rather than seconds.
+
+The DSP count is a curiosity, not a claim: the design uses 0 of the KV260's 1248 DSPs, but that is
+because the multiplies are small and serial, not because these multipliers beat a DSP.
 
 ## The output head
 

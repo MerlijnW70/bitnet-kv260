@@ -1,0 +1,18 @@
+# The two-bit serial multiplier from nothing: x on row 0 and y on row 1, a bit a step, least
+# significant first, and the four-bit product a bit a step on the lane, the high two of them
+# through the hold. Sixteen cases, sixty-four answer bits; from nothing the card reaches all but
+# two of them on this seed and all but four on most, so the planned grids are seeded with `start`.
+inputs 4
+outputs 4
+rows 32
+columns 12
+steps 2
+state 8
+hold 2
+fold 1 below
+gates sum maj not up down leap hop
+colony 4096
+renew 32
+lean wires
+seed 1
+serial mul

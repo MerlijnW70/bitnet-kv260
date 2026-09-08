@@ -42,6 +42,9 @@ jobs:
       - name: no comments in any code file
         run: python tools/no_comments.py
 
+      - name: every grown piece against its truth table
+        run: python hardware/grown/verify_pieces.py
+
       - name: every script the docs tell people to run is executable
         run: |
           set -eu

@@ -137,16 +137,23 @@ bitnet_chat.py's chat_text().
 6. hardware/mul16.v
 --------------------
 
-The 16x16 multipliers in the FFN glue were not written by hand and are not from any third party:
-they were grown by an evolutionary circuit compiler, assembled from sixteen partial-product pieces
-it kept. They are original work under this repository's Apache 2.0 licence.
+The 16x16 multipliers in the FFN glue were not written by hand and are not from any third party.
+Each of the sixteen partial-product pieces was laid out on a grid by a deterministic planner; that
+layout was then seeded, 4,096 copies of it, as the starting population of an evolutionary circuit
+compiler, which kept a candidate only when it was exact on 65,536 rows of the piece's truth table
+and pruned the gates that carried nothing. The serial adder the pieces are summed by was laid out
+by hand and seeded the same way. Unseeded, the search did not converge even on a 2-bit multiplier.
+docs/how-it-works.md tells that in full and hardware/grown/ holds the grids, the exam files, the
+failed attempt and a standalone verifier. They are original work under this repository's Apache 2.0
+licence.
 
 The provenance that stood in the file's own headers, kept here because the source carries no
 comments: the modules pp00..pp15 and serial_add were emitted by `oracle netlist`, and in each of
 them the line `always @(posedge clk or posedge rst)` was rewritten to `always @(posedge clk)`, so
-rst is a synchronous clear. pp00..pp15 are the card-kept grids expeditions/mul/pp<i>fed.grid and
-serial_add is expeditions/serial/planned.grid; mul16 composes them into a bit-serial 16x16
-multiplier, a balanced tree four levels deep with a register on every node.
+rst is a synchronous clear. pp00..pp15 are the card-kept grids expeditions/mul/pp<i>fed.grid --
+published here as hardware/grown/pp<i>fed.grid -- and serial_add is the hand-laid nine-gate grid
+expeditions/serial/planned.grid, which is not published; mul16 composes them into a bit-serial
+16x16 multiplier, a balanced tree four levels deep with a register on every node.
 
 Nothing in hardware/ or runtime/ instantiates a Xilinx primitive -- no BUFG, XPM_, FDRE, RAMB or
 DSP48 appears anywhere; the only vendor-specific text is the X_INTERFACE_INFO attribute strings,

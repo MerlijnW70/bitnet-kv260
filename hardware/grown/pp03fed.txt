@@ -1,0 +1,24 @@
+# The partial product x(k-3) AND y_3 of a 16-bit serial multiplier: the planned grid
+# expeditions/mul/pp03.grid (17 gates, board/research/ternary/ppplan.py) seeded into
+# the computed table, which the card keeps whole under `lean wires` over the sampled rows and
+# every one of the confirm rows: the piece board/research/ternary/mulcompose.py composes into
+# board/mul16.v.
+inputs 32
+outputs 32
+rows 32
+columns 8
+steps 16
+state 27
+hold 16
+fold 1 below
+gates sum maj not up down leap hop
+colony 4096
+renew 32
+sample 256
+confirm 65536
+packed
+lean wires
+seed 4343
+serial pp 3
+start expeditions/mul/pp03.grid 4096
+keep expeditions/mul/pp03fed.grid
