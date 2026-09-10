@@ -58,40 +58,11 @@ module ternary_matvec #(
     assign status = {idle, (state == S_LOAD || state == S_COMPUTE || state == S_DRAIN),
                      state, act_beat, neurons_done};
 
-    function [255:0] dmask(input integer t, input integer b);
-        integer i, j, v, c;
-        begin
-            dmask = 256'd0;
-            for (i = 0; i < 256; i = i + 1) begin
-                v = i; c = 0;
-                for (j = 0; j < 5; j = j + 1) begin
-                    if (j == t) c = v % 3;
-                    v = v / 3;
-                end
-                dmask[i] = (c >> b) & 1;
-            end
-        end
-    endfunction
-    localparam [255:0] M0 = dmask(0, 0), M1 = dmask(0, 1);
-    localparam [255:0] M2 = dmask(1, 0), M3 = dmask(1, 1);
-    localparam [255:0] M4 = dmask(2, 0), M5 = dmask(2, 1);
-    localparam [255:0] M6 = dmask(3, 0), M7 = dmask(3, 1);
-    localparam [255:0] M8 = dmask(4, 0), M9 = dmask(4, 1);
     wire [LANES*2-1:0] wcode;
     genvar gs, gi, gj;
     generate
         for (gj = 0; gj < 16; gj = gj + 1) begin : dec
-            wire [7:0] byt = s_axis_tdata[8*gj +: 8];
-            assign wcode[10*gj + 0] = M0[byt];
-            assign wcode[10*gj + 1] = M1[byt];
-            assign wcode[10*gj + 2] = M2[byt];
-            assign wcode[10*gj + 3] = M3[byt];
-            assign wcode[10*gj + 4] = M4[byt];
-            assign wcode[10*gj + 5] = M5[byt];
-            assign wcode[10*gj + 6] = M6[byt];
-            assign wcode[10*gj + 7] = M7[byt];
-            assign wcode[10*gj + 8] = M8[byt];
-            assign wcode[10*gj + 9] = M9[byt];
+            trit_decode_lut unpack (.byt(s_axis_tdata[8*gj +: 8]), .wcode(wcode[10*gj +: 10]));
         end
     endgenerate
 

@@ -16,7 +16,7 @@ check() {
 
 if [ "$which" = both ] || [ "$which" = matvec ]; then
     echo "== tb_ternary_matvec (the ternary matvec engine, base 3, batch 1..4, K = 2560 and 6912)"
-    iverilog -o matvec.vvp tb_ternary_matvec.v ternary_matvec.v
+    iverilog -o matvec.vvp tb_ternary_matvec.v ternary_matvec.v trit_decode_lut.v
     vvp matvec.vvp > matvec.log 2>&1 || true
     cat matvec.log
     check tb_ternary_matvec matvec.log "0 wrong, 0 protocol faults"

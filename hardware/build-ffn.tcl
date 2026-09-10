@@ -28,6 +28,7 @@ create_project -force -part $part ${name}_pl [file join $here work_$name]
 set_property board_part $board [current_project]
 add_files [list \
     [file join $here ternary_matvec.v] \
+    [file join $here trit_decode_lut.v] \
     [file join $here ternary_matvec_axi.v] \
     [file join $here mul16.v] \
     [file join $here ternary_glue.v] \
