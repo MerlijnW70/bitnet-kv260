@@ -29,6 +29,11 @@ recorded as *"the fixed runtime"*.
 |---|---|
 | `kria-speed2-results.txt` | the main speed and power pass on the shipped base-3 bitstream: tokens a second, where a token goes, bandwidth, power, the bitnet.cpp comparison, and the honest open item (the shift-scan stall) |
 | `kria-spec-results.txt` | the speculative-decoding study and the barrier fix; also 13,113 id-against-id comparisons proving the shipped runtime emits the same tokens as before the fix, disturbed and undisturbed |
+| `phase-remeasure.log` | the engine pipeline split step by step on the shipped bitstream, twice, and one engine-0 burst sampled in 24 slices, from a profiling build of the runtime that is not shipped |
+| `probe4.log` | when each of the four engines finishes, in each of the four phases, on the shipped bitstream |
+| `probe5.log` | how far each engine has got when the first one finishes, and the time an even split would save |
+| `lone-test.log` | the same four-engine timing on a bitstream, not shipped, with the engines on HP0 HP1 HP3 HPC0, and its 2097 ids against the shipped bitstream's |
+| `kria-ddr-results.txt` | the DMA burst pass, and the `spread` port arrangement measured 6.4% slower |
 | `kria-quality.txt` | the 26-prompt battery, three ways, with all 78 answers and four judges' verdicts |
 | `quality-answers.json` | the raw answers, ids, timings and repetition records those verdicts were formed from |
 | `edge-demo-results.txt` | the 40-alarm edge demo: strict JSON 40/40, severity 16/30, energy an answer, and what the board could and could not be used for |

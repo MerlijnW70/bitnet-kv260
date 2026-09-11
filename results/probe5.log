@@ -1,0 +1,42 @@
+=== provenance
+Fri Sep 11 00:31:35 UTC 2026
+fbc2207f47991534e12f593de6783ad6  bitnet_kria_probe5.c
+7b4f9585ea83134d3c5490e05211fd2a  bitnet_kria_probe5
+                    kv260-bitnet            XRT_FLAT                    kv260-bitnet            XRT_FLAT               (0+0)                  0,
+pl0_ref 249999998 Hz
+=== PROBE_PHASE=401
+  phase 401, 960 neurons an engine, us from the first weight arm:
+    engine   first done   all done   done when the first engine finished
+         0         9.7      127.2   960 of 960 at 127.2
+         1         9.7      139.9   869 of 960 at 127.2
+         2         9.7      139.9   867 of 960 at 127.2
+         3         9.7      128.7   956 of 960 at 127.2
+    measured burst 130.2 us; all four together ran 31.081 neurons a us;
+    balanced, 3840 neurons at that rate would take 123.5 us, saving 6.7 us
+=== PROBE_PHASE=402
+  phase 402, 640 neurons an engine, us from the first weight arm:
+    engine   first done   all done   done when the first engine finished
+         0         3.2       87.9   640 of 640 at 87.9
+         1         3.2      111.9   462 of 640 at 87.9
+         2         3.2      111.9   459 of 640 at 87.9
+         3         3.2       89.5   630 of 640 at 87.9
+    measured burst 108.7 us; all four together ran 25.859 neurons a us;
+    balanced, 2560 neurons at that rate would take 99.0 us, saving 9.7 us
+=== PROBE_PHASE=403
+  phase 403, 1728 neurons an engine, us from the first weight arm:
+    engine   first done   all done   done when the first engine finished
+         0        30.2      233.2   1728 of 1728 at 233.2
+         1        30.2      291.8   1288 of 1728 at 233.2
+         2        30.2      291.8   1285 of 1728 at 233.2
+         3        30.2      235.1   1718 of 1728 at 233.2
+    measured burst 261.6 us; all four together ran 29.650 neurons a us;
+    balanced, 6912 neurons at that rate would take 233.1 us, saving 28.5 us
+=== PROBE_PHASE=404
+  phase 404, 640 neurons an engine, us from the first weight arm:
+    engine   first done   all done   done when the first engine finished
+         0         3.0      229.1   640 of 640 at 229.1
+         1         3.0      249.5   582 of 640 at 229.1
+         2         3.0      250.3   581 of 640 at 229.1
+         3         3.0      230.1   638 of 640 at 229.1
+    measured burst 247.3 us; all four together ran 10.795 neurons a us;
+    balanced, 2560 neurons at that rate would take 237.1 us, saving 10.2 us

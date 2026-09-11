@@ -1,0 +1,268 @@
+The DDR read ceiling of the KV260's four ternary matvec engines, measured 2026-09-06: what raised it and
+what did not.  The fabric reads weights at 12.19 GB/s before and 13.33 GB/s after (+9.4%), a generated
+token's engine time falls 43.45 -> 39.59 ms, generation 13.05 -> 13.87 tokens/s and a prompt token
+15.88 -> 16.95, and all 2097 generated ids of the 31-prompt battery are byte-identical to the baseline's.
+
+WHAT CHANGED, AND WHAT DID NOT
+  Changed: board/build-ffn.tcl only, two parameters on all five AXI DMAs (the four engines' and the
+  glue's), nothing else in the design:
+      c_s2mm_burst_size        16 -> 256    a write carries 256 beats of sums, not 16
+      c_m_axi_s2mm_data_width  32 -> 128    and each beat is 16 bytes, not 4
+  so the sums leave in writes of up to 4096 bytes instead of 64, and the DDR turns the bus around
+  between reads and writes some sixty times less often.
+  The sum STREAM is still 32 bits (c_s_axis_s2mm_tdata_width 32), so ternary_matvec.v, ternary_glue.v,
+  mul16.v, the shells, the stream formats, the control and status words, the register map and the
+  device-tree overlay are all untouched.  No software change: board/bitnet_kria.c, ternary_matvec.c,
+  ternary_ffn.c, bitnet_chat.py, quality_board.py and runbench.py are the same files, and the binaries
+  measured before and after are the same binary.
+  Not changed, because measured and rejected: the MM2S max burst (64 -> 256 does nothing, twice) and the
+  PS port arrangement (engines on HP0 HP2 HPC0 HPC1 instead of HP0..HP3 is 6.4% SLOWER).
+  Constraint the wider S2MM adds (met everywhere today, worth keeping in mind): the DMA has no DRE, so
+  each engine's sum buffer must start on a 16-byte boundary.  In bitnet_kria.c every sum buffer is a
+  4096-byte-aligned offset plus i * neurons_per_engine * 4, and neurons_per_engine is 960 (qkv), 640 (o),
+  3456 (gate+up), 640 (down) and 32064 (head) -- all multiples of 4, so every start is 16-byte aligned.
+  In ternary_matvec.c it is i * 6912 and in ternary_ffn.c the same shape.
+
+SETUP
+  Board: Kria KV260 (xck26-sfvc784-2LV-c), hostname kria, Ubuntu 22.04.4, kernel 5.15.0-1027-xilinx-zynqmp,
+  3911 MB RAM, cma=1000M, idle, nothing else on the board.  Vivado 2026.1 on the PC, one at a time.
+  Buffers unchanged: /dev/udmabuf0 phys 0x38300000 size 545259520, udmabuf1 0x58b00000 8388608,
+  udmabuf2 0x59300000 83886080.  pl0_ref 249999998 Hz after every load (the ffn.dtso overlay).
+  Bitstreams (both by board/build-ffn.tcl, Vivado 2026.1, 250 MHz, strategy Performance_ExplorePostRoutePhysOpt):
+    before  board/ffn.bit.bin md5 e2c75fd399848b1f672326f4a559f236, 7797692 bytes
+            WNS 0.272 ns, TNS 0.000, WHS 0.010, THS 0.000, 0 critical warnings; 28357 CLB LUTs, 45519 FFs
+    after   board/ffn.bit.bin md5 10a64c4deb2d147b7ebc6160e4923ae1, 7797692 bytes
+            WNS 0.228 ns, TNS 0.000, WHS 0.010, THS 0.000, 0 critical warnings (synth and impl);
+            "All user specified timing constraints are met"; 30962 CLB LUTs (26.44%), 49174 FFs (20.99%),
+            491 CARRY8, 47 RAMB36 + 5 RAMB18.  Per block: engine0 1387 LUTs / 787 FFs (was 1265/787 --
+            placement noise, the RTL is identical), glue 2465/5557 (was 2460/5557), dma0 2051/3114
+            (was 1620/2461: the wider, longer-bursting S2MM is the whole growth, about 430 LUTs on
+            each of the five DMAs).
+            The rebuild under the shipped defaults is byte-identical to the variant that was validated
+            (md5 10a64c... both), so every "after" number below was taken on the file that ships.
+  Binary: /home/ubuntu/bitnet-kria/bitnet_kria, md5 97cfa59d132a5d0076ee0c4db1166d89 (the overlap agent's,
+  from board/bitnet_kria.c md5 fcbf52c5c4bd754f220f664e922e5384), unchanged across every run here.
+  Baselines kept on the board: ~/ffn/ffn-shipped.bit.bin (the before bitstream),
+  ~/bitnet-kria/baseline/{bitnet_kria, bitnet_kria_headfabric, ids-arm-baseline.json}.
+
+WHAT WAS TRIED, IN ORDER (4 engines, 4423680 weight bytes = 276480 beats, board/ternary_matvec.c's
+benchmark, one core pinned to the driver: sudo taskset -c 0 ./ternary_matvec --engines 4 --runs N)
+  Every line below is the driver's own summary line, verbatim; "0 of 6912 wrong" in every run of every set.
+
+  1. THE BASELINE (MM2S burst 64, S2MM burst 16, S2MM memory port 32 bits, engines on HP0..HP3, glue HPC0)
+     weight phase over 2000 runs on 4 engines: mean 0.363 ms (12.175 GB/s, 3.044 GB/s a stream), min 0.357 ms (12.379 GB/s, 3.095 GB/s a stream); whole matvec mean 0.371 ms, min 0.365 ms
+     weight phase over 20000 runs on 4 engines: mean 0.363 ms (12.186 GB/s, 3.046 GB/s a stream), min 0.348 ms (12.705 GB/s, 3.176 GB/s a stream); whole matvec mean 0.371 ms, min 0.356 ms
+     scaling: E=1 1.117 ms (3.960 GB/s), E=2 0.560 (7.895), E=3 0.381 (11.607), E=4 0.363 (12.186).
+
+  2. (a) MM2S MAX BURST 64 -> 256 BEATS.  NOTHING.  (build-ffn.tcl name ffn256 burst 256)
+     weight phase over 2000 runs on 4 engines: mean 0.363 ms (12.196 GB/s, 3.049 GB/s a stream), min 0.357 ms (12.380 GB/s, 3.095 GB/s a stream); whole matvec mean 0.371 ms, min 0.365 ms
+     +0.2%, inside the run-to-run spread.  Scaling identical (E=1 3.959, E=2 7.896, E=3 11.608 GB/s).
+     The change did reach the pins: in the generated work_<name>/.../design_1.bd the five SmartConnect
+     masters into the PS carry MAX_BURST_LENGTH 64 for the baseline and 256 with burst 256 (the shipped
+     design carries 256 too, there because of the S2MM burst), and dma0 grew 1620 -> 1656 LUTs and
+     2461 -> 2477 FFs.  Tried again on top of the winning
+     S2MM change (name ffnall burst 256 sburst 256 swidth 128) and it is still nothing:
+     weight phase over 20000 runs on 4 engines: mean 0.331 ms (13.364 GB/s, 3.341 GB/s a stream), min 0.321 ms (13.765 GB/s, 3.441 GB/s a stream); whole matvec mean 0.339 ms, min 0.329 ms
+     against 13.326 GB/s for the same design with the burst left at 64.  So the shipped design keeps 64:
+     a longer read burst is not what the DDR path is short of.
+
+  3. (b) THE PORT ARRANGEMENT.  WORSE.  (name ffnspread ports spread: engines on HP0, HP2, HPC0, HPC1,
+     glue on HP1, so the engines' reads are split over the two AFI pairs AND the CCI)
+     weight phase over 2000 runs on 4 engines: mean 0.388 ms (11.398 GB/s, 2.849 GB/s a stream), min 0.380 ms (11.651 GB/s, 2.913 GB/s a stream); whole matvec mean 0.396 ms, min 0.388 ms
+     -6.4% against the baseline.  Where it goes wrong is the fourth engine, not the third: E=1 3.960,
+     E=2 (HP0+HP2) 7.894, E=3 (+HPC0) 11.562 -- all within 0.5% of the HP-only design -- and only
+     E=4 (+HPC1) falls, 12.19 -> 11.40.  A coherent port is as good as an AFI port for one stream and
+     the second one costs.
+     Which HP ports the engines use does not matter at all below the ceiling: two engines reach
+     7.890-7.897 GB/s on every pair, measured on the baseline bitstream by moving the driver's base
+     and stride ({0,1} 7.896, {0,2} 7.890, {0,3} 7.896, {1,2} 7.894, {2,3} 7.897 GB/s), so HP0/HP1 and
+     HP2/HP3 do not share a limit that two engines can reach.  Today's HP0..HP3 is the best of the
+     arrangements the PS offers.
+
+  4. THE SUMS' WRITES ARE WHAT COSTS.  S2MM BURST 16 -> 256.  +7.4%.  (name ffns256 sburst 256)
+     weight phase over 20000 runs on 4 engines: mean 0.338 ms (13.090 GB/s, 3.272 GB/s a stream), min 0.330 ms (13.387 GB/s, 3.347 GB/s a stream); whole matvec mean 0.346 ms, min 0.339 ms
+     What pointed at it: on the baseline bitstream the same 4423680 weight bytes ran at two different
+     rates depending only on how many 32-bit sums came back with them.  board/ternary_ffn.c, token 2,
+     five runs, verbatim:
+       token 2 over 5 runs: gate+up weight phase mean 0.734 ms (12.048 GB/s), min 0.726 ms (12.189 GB/s); down weight phase mean 0.341 ms (12.969 GB/s), min 0.339 ms (13.037 GB/s)
+     gate+up is 8847360 bytes for 13824 sums (one sum per 640 bytes), down is 4423680 bytes for 2560
+     sums (one per 1728) -- and down runs 7.6% faster.  With 64-byte writes (16 beats x 32 bits) the
+     DDR turns the bus around thousands of times a matvec; with 1024-byte writes it hardly notices.
+     After the change the two converge (same command, token 2): gate+up min 0.688 ms (12.866 GB/s),
+     down min 0.339 ms (13.046 GB/s).
+
+  5. AND THE S2MM MEMORY PORT 32 -> 128 BITS.  +1.8% MORE.  THIS SHIPS.  (name ffnsw sburst 256 swidth 128)
+     weight phase over 2000 runs on 4 engines: mean 0.331 ms (13.367 GB/s, 3.342 GB/s a stream), min 0.326 ms (13.585 GB/s, 3.396 GB/s a stream); whole matvec mean 0.339 ms, min 0.334 ms
+     weight phase over 20000 runs on 4 engines: mean 0.332 ms (13.326 GB/s, 3.331 GB/s a stream), min 0.321 ms (13.789 GB/s, 3.447 GB/s a stream); whole matvec mean 0.340 ms, min 0.329 ms
+     and on the shipped file after the final rebuild and reload:
+     weight phase over 2000 runs on 4 engines: mean 0.331 ms (13.380 GB/s, 3.345 GB/s a stream), min 0.324 ms (13.665 GB/s, 3.416 GB/s a stream); whole matvec mean 0.339 ms, min 0.332 ms
+     scaling: E=1 1.118 ms (3.956 GB/s), E=2 0.561 (7.890), E=3 0.380 (11.634), E=4 0.332 (13.326).
+     One, two and three engines are unchanged to within 0.2% -- they never reached the ceiling -- and
+     the fourth engine now adds 1.69 GB/s where it used to add 0.58.
+
+NUMBERS
+  THE FABRIC'S READ RATE (4 engines, 20000 runs, driver pinned to one core)
+    before  0.363 ms a matvec, 12.186 GB/s, 3.046 GB/s a stream = 0.761 beats a clock at 250 MHz
+    after   0.332 ms a matvec, 13.326 GB/s, 3.331 GB/s a stream = 0.833 beats a clock
+            +9.4%; 48.7 -> 53.3 G ternary MAC/s on this matvec (4 weights a byte)
+    The four pipes could take 16.0 GB/s (1.0 beats a clock a stream): 76.2% of that before, 83.3% after.
+
+  HOW MUCH THE DDR HAS LEFT (board/research/ternary/bitnet/memread.c, three A53 threads pinned to cores
+  1-3 reading 3 x 64 MB in a loop, while the driver on core 0 streams weights for 20000 matvecs)
+    the A53s alone (3 threads)                 5.703 GB/s
+    the fabric alone                          12.186 GB/s (before)   13.326 GB/s (after)
+    both at once, fabric / A53s / together      9.144 / 4.466 / 13.610 GB/s (before)
+                                                9.499 / 4.522 / 14.021 GB/s (after)
+    So the DDR gives about 14.0 GB/s to all its masters together and the fabric alone now takes 13.3-13.8
+    of it: 95% of what the memory has been seen to deliver.  Before this change the fabric took 12.2 of
+    a 13.6 GB/s total (90%) and the missing bandwidth was going into read/write turnarounds.
+    (The PS DPLL runs at 1066.67 MHz -- dpll_int 2133333312 Hz in clk_summary -- so the DDR4 is at
+    2133 MT/s = 17.07 GB/s of peak; 14.0 GB/s is 82% of peak, which is what a DDR4 controller gives on
+    mixed multi-stream traffic.  The DDR rate itself is not in clk_summary; it is inferred from the PLL.)
+
+  A GENERATED TOKEN, PER FORWARD, the runtime's own line, VERBATIM
+  (python3 speedbench.py --exe ./bitnet_kria --head fabric; bench:crc32 is 30 prompt ids and 77 generated,
+  battery:q23_long 53 and 256, so the second one ends past 300 positions)
+    bench:crc32
+      before  prompt 30 tokens 1971.5 ms (15.22 tok/s), generated 77 5991.4 ms (12.85 tok/s)
+        per forward over 106 (ms): engines qkv 6.810, o 3.970, gate+up 22.183, down 10.278 (43.241
+        together); activation loads 1.081; glue A 3.420 B 3.407; shift scan 2.898; sums out 0.978;
+        attention 6.023; norms, quant, RoPE and residuals 3.844; waiting on the side thread 0.105;
+        forward total 69.374. side thread busy 4.679 ms a forward. head 7.853 ms a call over 77 calls
+        head stages (ms a call over 77 calls): stage 1 ternary stream 6.679, its activation load 0.009,
+        sync and top-256 0.968, stage 2 exact rescore 0.186, head total 7.853
+      after   prompt 30 tokens 1777.1 ms (16.88 tok/s), generated 77 5488.2 ms (14.03 tok/s)
+        per forward over 106 (ms): engines qkv 6.072, o 3.692, gate+up 19.805, down 9.900 (39.468
+        together); activation loads 1.080; glue A 3.440 B 3.426; shift scan 2.897; sums out 1.010;
+        attention 7.040; norms, quant, RoPE and residuals 3.971; waiting on the side thread 0.139;
+        forward total 63.177. side thread busy 4.659 ms a forward. head 7.327 ms a call over 77 calls
+        head stages (ms a call over 77 calls): stage 1 ternary stream 6.016, its activation load 0.009,
+        sync and top-256 1.075, stage 2 exact rescore 0.215, head total 7.327
+    battery:q23_long
+      before  prompt 53 tokens 3580.6 ms (14.80 tok/s), generated 256 22244.7 ms (11.51 tok/s)
+        per forward over 309 (ms): engines qkv 6.823, o 3.983, gate+up 22.364, down 10.282 (43.453
+        together); activation loads 1.096; glue A 3.423 B 3.407; shift scan 3.073; sums out 1.432;
+        attention 14.170; norms, quant, RoPE and residuals 3.889; waiting on the side thread 0.186;
+        forward total 77.037. head 7.838 ms a call, stage 1 ternary stream 6.676 ms
+      after   prompt 53 tokens 3148.0 ms (16.84 tok/s), generated 256 20680.9 ms (12.38 tok/s)
+        per forward over 309 (ms): engines qkv 6.052, o 3.685, gate+up 19.987, down 9.870 (39.594
+        together); activation loads 1.091; glue A 3.443 B 3.428; shift scan 3.069; sums out 1.408;
+        attention 14.229; norms, quant, RoPE and residuals 3.921; waiting on the side thread 0.127;
+        forward total 71.122. head 7.137 ms a call, stage 1 ternary stream 5.978 ms
+    The four engine phases, ms a forward, and what they are in GB/s (the bytes are fixed: 73.728 MB of
+    qkv, 49.152 of o, 265.421 of gate+up, 132.710 of down, 521.011 MB a token in all):
+      qkv      6.823 -> 6.052   (10.80 -> 12.18 GB/s)
+      o        3.983 -> 3.685   (12.34 -> 13.34)
+      gate+up 22.364 -> 19.987  (11.87 -> 13.28)
+      down    10.282 ->  9.870  (12.91 -> 13.45)
+      all     43.453 -> 39.594  (11.99 -> 13.16 GB/s; 47.96 -> 52.63 G ternary MAC/s a token)
+    The head's stage 1 (82.084 MB of ternary head weights): 6.676 -> 5.978 ms = 12.29 -> 13.73 GB/s.
+    Everything the fabric streams in a generated token: 603.095 MB in 50.13 -> 45.57 ms.
+    Nothing else moves: the glue's two passes 6.830 -> 6.871 ms (it now shares the S2MM change and is
+    0.6% slower: its own DMA holds its output a little longer), the shift scan 3.073 -> 3.069, the
+    activation loads 1.096 -> 1.091, attention and the norms unchanged inside the noise.
+
+  TOKENS A SECOND, THE WHOLE BATTERY (31 prompts: the 26 of quality_prompts.json with its system message
+  and the 5 of prompts.json; 953 prompt tokens and 2097 generated; greedy, 4 threads, --context 1024,
+  float32 KV cache, one long-lived process a max_new group, exactly as headcheck.py runs it; both
+  measured tonight on the idle board with the same binary)
+                            before        after      after, --head arm (the control)
+    prompt                 15.88        16.95        16.93  tok/s
+    generation             13.05        13.87         8.58  tok/s
+    prompt seconds         60.027       56.221       56.287
+    generation seconds    160.633      151.188      244.474
+    a prompt token         62.99 ms     58.99 ms     59.06 ms
+    a generated token      76.60 ms     72.10 ms    116.58 ms
+    head a call             7.857 ms     7.161 ms    51.878 ms
+  +6.7% a prompt token and +6.3% a generated one.  The ARM-head column is the control that the ARM head
+  is untouched: it gains the same 4 ms a prompt token from the faster engines and nothing on generation,
+  because 51.9 ms of int8 head on the A53s is not fabric work.
+
+THE PROOF THAT NO TOKEN ID CHANGED -- 31 prompts, 2097 generated ids, three full battery runs (6291 ids)
+  1. python3 headcheck.py ids-fabric-before.json --head fabric        (the before bitstream reloaded)
+     python3 headcheck.py ids-fabric-sw.json --head fabric            (the shipped bitstream)
+     python3 headcheck.py ids-arm-sw.json --head arm                  (the shipped bitstream, ARM head)
+  2. python3 headcheck.py --compare baseline/ids-arm-baseline.json ids-fabric-sw.json
+       -> "31 prompts, 2097 generated ids compared: ALL IDENTICAL"
+     python3 headcheck.py --compare ids-fabric-before.json ids-fabric-sw.json
+       -> "31 prompts, 2097 generated ids compared: ALL IDENTICAL"
+     python3 headcheck.py --compare baseline/ids-arm-baseline.json ids-arm-sw.json
+       -> "31 prompts, 2097 generated ids compared: ALL IDENTICAL"
+     (baseline/ids-arm-baseline.json is the head agent's original int8-head run, the oldest baseline
+     there is; the shipped bitstream also matches the overlap agent's ids-overlap-f32.json, ALL IDENTICAL.)
+  3. sudo ./bitnet_kria --stage-check refdump/stages.bin --head fabric --timing   (rc 0)
+       "stage check: every integer stage exact, every float stage above its cosine floor, every top-1
+        the reference's", and at all 8 dumped positions "two-stage fabric argmax N, exact head N same".
+       No line says NOT EXACT / DIFFERS / BELOW THE FLOOR.  Kept in ddr-stagecheck.txt.
+  4. The fabric's own reference tests on the shipped bitstream:
+       sudo ./ternary_matvec --engines 4 --runs 20000  ->  "runs with any mismatch: 0 of 20000"
+       sudo ./ternary_ffn --tokens 4 --runs 5          ->  "mismatches over 4 tokens: runs with any
+       mismatch 0 of 20", "every value matched the reference in every run" (g, u, h, q and d, so the
+       glue and its Oracle-grown multipliers are exact too)
+  The id comparisons in full are in ddr-idcheck.txt, the stage check in ddr-stagecheck.txt.
+
+POWER (board/power-bitnet.sh: 25-token prompt, 256 generated, --context 512, --head fabric, INA260 at
+/sys/class/hwmon/hwmon2 sampled every 50 ms; the same command before and after)
+                     before                        after
+  generation         5.389 W over 22.014 s         5.628 W over 20.431 s
+  prompt             5.455 W over  1.635 s         5.664 W over  1.487 s
+  idle (before/after the run)  3.478 / 3.489 W     3.542 / 3.548 W
+  a generated token  0.4634 J                      0.4491 J            -3.1%
+  over the idle draw 0.1643 J                      0.1665 J            +1.3%
+  The same arithmetic in less time at proportionally more power: the fabric is busy a larger fraction of
+  the token, so the board draws 0.24 W more and finishes 7.2% sooner.  Nothing throttled; hwmon0 temps
+  under 40 C throughout.
+
+WHAT IS LEFT
+  Of a 72.10 ms generated token the fabric now streams for 45.6 ms (engines 39.6, head stage 1 6.0) and
+  the A53s work for the rest.  The read path is at 13.33 GB/s against the 14.02 GB/s the DDR has been
+  measured to hand out in total, so at most 5% more is available by pushing the memory path, and the
+  four AXI pipes' 16.0 GB/s is no longer the binding limit either -- the DRAM is.
+  The one lever left on the fabric side is the traffic itself, plan point 4(c): five trits a byte in base
+  3 (243 of 256 values) is 1.6 bits a weight instead of 2, so a beat would carry 80 weights instead of 64
+  and a token's 521.0 MB would become 417.5 MB (K = 2560 is 32 beats exactly; K = 6912 needs 87 beats,
+  6960 weights, 48 of them zero padding).  PROJECTION, not a run: at the measured 13.33 GB/s the engine
+  phases would fall 39.59 -> 31.7 ms and the head's stage 1 5.98 -> 4.8, so a generated token 72.1 ->
+  63.0 ms and generation 13.87 -> 15.9 tokens/s.  It costs a real engine change (a 256-entry decode table
+  a byte, 80 lanes instead of 64, a seven-level adder tree, a 640-bit activation store word), a repacked
+  model.bin and head_t.bin, a runtime that knows the new beat counts, a rebuild and a full revalidation;
+  it is exact by construction (the same ternary weights, the same integer sums), so the ids should not
+  move, but nothing of it is measured here.
+  Not tried: the DDRC's own port priorities and QoS registers (they are PS registers, not a bitstream
+  change); a second pl_clk to run the engines faster (pointless while a stream sits at 0.83 beats a clock
+  waiting for DDR).
+
+FILES
+  board/build-ffn.tcl                      the shipped defaults are now sburst 256 and swidth 128, and the
+                                           script takes five name-value arguments (name, burst, sburst,
+                                           swidth, ports) so each variant above is one command
+  board/ffn.bit.bin (ignored) + board/ffn.bit.prm, board/ffn-timing.txt, board/ffn-utilization.txt,
+  board/ffn-utilization-hier.txt           rebuilt: md5 10a64c4deb2d147b7ebc6160e4923ae1
+  board/research/ternary/bitnet/memread.c  the A53 memory-read benchmark used for the DDR total
+  board/research/ternary/bitnet/kria-ddr-results.txt   this file
+  board/research/ternary/bitnet/ddr-idcheck.txt        the three battery comparisons, verbatim
+  board/research/ternary/bitnet/ddr-stagecheck.txt     --stage-check on the shipped bitstream, verbatim
+  Unchanged: ternary_matvec.v, ternary_matvec_axi.v, ternary_glue.v, ternary_glue_axi.v, mul16.v,
+  ffn.dtso, bitnet_kria.c, ternary_matvec.c, ternary_ffn.c.
+  On the board: ~/ffn/{ffn.bit.bin (the new one), ffn-shipped.bit.bin (the old one), ffn.dtbo},
+  ~/bitnet-kria/{ids-fabric-before.json, ids-fabric-sw.json, ids-arm-sw.json, ddr-idcheck.txt,
+  ddr-stagecheck.txt, power-before.log, power-after.log, fabric-before.json, fabric-sw.json},
+  ~/matvec/{memread.c, memread}.
+
+COMMANDS
+  vivado -mode batch -source build-ffn.tcl -notrace
+  vivado -mode batch -source build-ffn.tcl -notrace -tclargs name ffn256 burst 256
+  vivado -mode batch -source build-ffn.tcl -notrace -tclargs name ffnspread ports spread
+  vivado -mode batch -source build-ffn.tcl -notrace -tclargs name ffns256 sburst 256
+  scp board/ffn.bit.bin ubuntu@kria:/home/ubuntu/ffn/
+  ssh ubuntu@kria 'cd ~/ffn && sudo fpgautil -R; sudo fpgautil -b ffn.bit.bin -o ffn.dtbo; cat /sys/class/fpga_manager/fpga0/state; sudo grep " pl0_ref " /sys/kernel/debug/clk/clk_summary'
+  ssh ubuntu@kria 'cd ~/matvec && sudo taskset -c 0 ./ternary_matvec --engines 4 --gpio 0xA0000000 --dma 0xA0040000 --runs 20000 --show 0'
+  ssh ubuntu@kria 'cd ~/matvec && for e in 1 2 3; do sudo taskset -c 0 ./ternary_matvec --engines $e --gpio 0xA0000000 --dma 0xA0040000 --runs 200 --show 0; done'
+  ssh ubuntu@kria 'cd ~/matvec && sudo ./ternary_matvec --engines 2 --gpio 0xA0000000 --dma 0xA0040000 --gpio-stride 0x20000 --dma-stride 0x20000 --runs 200 --show 0'   (engines 0 and 2)
+  ssh ubuntu@kria 'cd ~/matvec && gcc -O3 -Wall -Wextra -o memread memread.c -lpthread && taskset -c 1,2,3 ./memread --threads 3 --mb 64 --seconds 16'
+  ssh ubuntu@kria 'cd ~/ffn && sudo ./ternary_ffn --tokens 4 --runs 5 --show 0'
+  ssh ubuntu@kria 'cd ~/bitnet-kria && python3 speedbench.py --exe ./bitnet_kria --head fabric --out fabric-sw.json'
+  ssh ubuntu@kria 'cd ~/bitnet-kria && python3 headcheck.py ids-fabric-sw.json --head fabric && python3 headcheck.py --compare baseline/ids-arm-baseline.json ids-fabric-sw.json'
+  ssh ubuntu@kria 'cd ~/bitnet-kria && sudo ./bitnet_kria --stage-check refdump/stages.bin --head fabric --timing'
+  ssh ubuntu@kria 'cd ~/bitnet-kria && sudo env LOG=power-after.log RUN=power-after-run.log FLAGS="--head fabric" ./power-bitnet.sh'
+  (sudo on the board: SUDO_ASKPASS=... sudo -A ..., or echo oracle-kria | sudo -S ...)

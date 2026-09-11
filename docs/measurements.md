@@ -63,9 +63,13 @@ Four engines take one 16-byte beat a clock each at 250 MHz: 16.0 GB/s if the mem
 | the head stream | 65,667,072 B in 4.103-4.123 ms = **15.93-16.01 GB/s**, 99.5-100.0% |
 
 The gap in the model stream is not the memory — the head stream proves the DDR feeds the fabric at
-its full beat rate in the same token. It is that the model is streamed in 120 short runs a token
-(four engine phases over thirty layers), each with its activation reload, register writes, DMA
-descriptor setup, completion poll and drain.
+its full beat rate in the same token. Nor is it the 120 short runs a token: every step outside the
+weight bursts together is 5.4% of the engine time, about 1.8 ms a token
+(`results/phase-remeasure.log`). It is inside the bursts. Engines 1 and 2, on HP1 and HP2, finish
+9-33% after engines 0 and 3 in every phase, together, while 0 and 3 wait (`results/probe4.log`).
+Other port arrangements are slower: 6.4% with the engines on HP0 HP2 HPC0 HPC1
+(`results/kria-ddr-results.txt`), and 7.5% more burst time on HP0 HP1 HP3 HPC0
+(`results/lone-test.log`).
 
 ## Power and energy
 
@@ -146,8 +150,11 @@ the flip-flops, for a fifth fewer bytes on the wire and four vectors answered a 
 
 Each of these is a projection, marked as one, and none is measured.
 
-1. **Fewer, longer engine runs** — the largest measured gap, 6.70 ms a token. Taken in full: 52.9 ms
-   a token, 18.9 tok/s.
+1. **An even split across the four engines** — engines 1 and 2 hold the other two up in every
+   phase. Shares matched to each engine's measured rate would save about 84 µs a layer
+   (`results/probe5.log`): 2.5 ms a token, 57.1 ms, 17.5 tok/s, at the price of repacking the 417 MB
+   weight file into uneven shares. Fewer, longer engine runs are worth at most the 1.8 ms the runs
+   cost: 57.8 ms, 17.3 tok/s.
 2. **Batched generation across independent conversations.** The engines already answer one pass of
    the weight stream for four vectors and the prompt already uses it; four separate conversations
    have no token-to-token dependency and `ctrl[10:9]` already carries the batch. Nothing in the

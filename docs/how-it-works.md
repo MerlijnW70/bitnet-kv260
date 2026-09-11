@@ -185,7 +185,8 @@ All three must land below 4 GiB, because the engines carry a 40-bit address but 
 
 See [measurements.md](measurements.md). The short version: the model stream runs at 12.73 GB/s
 against the head stream's 16.0, not because the memory cannot keep up — it demonstrably can, in the
-same token — but because the model is streamed in 120 short runs a token, each paying its activation
-reload, register writes, DMA descriptor setup, completion poll and drain. That is 6.70 ms a token.
+same token — and not because of the 120 short runs a token, whose setup, polls and drains come to
+about 1.8 ms. Inside the weight bursts, the engines on HP1 and HP2 finish 9-33% after the other two
+in every phase.
 The floor under everything, with every ARM millisecond hidden and every byte at the beat rate, is
 30.2 ms a token: **33 tokens a second**.

@@ -1,0 +1,59 @@
+=== provenance
+Thu Sep 10 23:28:25 UTC 2026
+6595394ea807a87e00f2f563cbb20917  bitnet_kria.c
+d66986f791d13ba3706e36b921032e4c  bitnet_kria_prof
+9c4e777b482ebca2926b01cef72ffb6a  bitnet_kria_probe
+                    kv260-bitnet            XRT_FLAT                    kv260-bitnet            XRT_FLAT               (0+0)                  0,
+pl0_ref 249999998 Hz
+=== phase profile: bitnet_kria_prof, prompt-batch 1, bench-battery-q23_long, max-new 60
+  phase breakdown over the whole run (ms, and us a phase at 120 a token):
+    act s2mm arm              25.425 ms    0.67%
+    act gpio+mm2s arm         34.346 ms    0.90%
+    act mm2s wait             20.594 ms    0.54%
+    act loaded wait           15.298 ms    0.40%
+    act gpio clear             7.881 ms    0.21%
+    w gpio+mm2s arm           33.802 ms    0.89%
+    w mm2s wait             3609.695 ms   94.64%
+    w s2mm wait               20.705 ms    0.54%
+    w done wait               19.187 ms    0.50%
+    w gpio clear + rearm      27.054 ms    0.71%
+    total in phases         3813.987 ms
+=== probe: bitnet_kria_probe, engine 0, PROBE_PHASE=401, same run
+  phase breakdown over the whole run (ms, and us a phase at 120 a token):
+    act s2mm arm              25.447 ms    0.67%
+    act gpio+mm2s arm         34.449 ms    0.90%
+    act mm2s wait             20.767 ms    0.54%
+    act loaded wait           15.252 ms    0.40%
+    act gpio clear             7.907 ms    0.21%
+    w gpio+mm2s arm           33.860 ms    0.89%
+    w mm2s wait             3606.698 ms   94.63%
+    w s2mm wait               20.722 ms    0.54%
+    w done wait               19.321 ms    0.51%
+    w gpio clear + rearm      27.017 ms    0.71%
+    total in phases         3811.441 ms
+  one burst of 960 neurons on engine 0, sampled in 24 slices:
+    slice   neurons        us     us/neuron
+        1        59       0.7         0.011
+        2        22       2.8         0.128
+        3        39       5.2         0.134
+        4        40       5.3         0.131
+        5        41       5.2         0.127
+        6        39       5.2         0.134
+        7        40       5.2         0.131
+        8        41       5.2         0.128
+        9        40       5.3         0.134
+       10        40       5.2         0.131
+       11        39       5.0         0.127
+       12        40       5.2         0.131
+       13        41       5.5         0.134
+       14        39       5.2         0.134
+       15        41       5.2         0.128
+       16        40       5.2         0.131
+       17        40       5.3         0.132
+       18        39       5.0         0.127
+       19        40       5.2         0.131
+       20        40       5.2         0.130
+       21        41       5.2         0.128
+       22        40       5.2         0.131
+       23        40       5.2         0.131
+       24        39       5.0         0.127
