@@ -18,6 +18,12 @@ hardware/*.str
 hardware/ffn-*.txt
 hardware/vivado*.log
 
+# Vivado reports a build writes beside the tcl; the ones kept are copied into hardware/reports/.
+hardware/*-timing.txt
+hardware/*-utilization*.txt
+hardware/*-console.out
+hardware/ecp5_*.json
+
 # The device-tree blob is built on the board from the .dtso beside it.
 firmware/*.dtbo
 

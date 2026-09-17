@@ -180,6 +180,12 @@ cache out; the same run then varies by up to 40%. The int8 cache is a quarter of
 Against the earlier 2-bit engine (1,353 LUT / 787 FF / 8 RAMB36 / 0 URAM): 3.09× the LUTs and 2.32×
 the flip-flops, for a fifth fewer bytes on the wire and four vectors answered a pass.
 
+On a Lattice ECP5, packed by yosys and nextpnr-ecp5 with the engine's UltraRAM mapped to block RAM
+(`hardware/ecp5-fit.sh`, `hardware/reports/ecp5-85k.txt`, `ecp5-45k.txt`): one engine is 8,111 LUT,
+2,236 FF and 40 DP16KD, the glue 4,663 LUT, 6,116 FF and 1 DP16KD. Four engines and the glue need
+161 block RAMs, which fits an LFE5UM-85F (208) and not a 45F (108), at 37,107 of 83,640 LUTs on the
+85F. That is packing only: nothing was routed, no timing was closed and nothing ran on an ECP5.
+
 ## What is left on the table
 
 Each of these is a projection, marked as one, and none is measured.

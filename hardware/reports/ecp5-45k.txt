@@ -1,0 +1,18 @@
+== yosys Yosys 0.68+136 (git sha1 c30457480-dirty, Release, GNU /usr/bin/x86_64-w64-mingw32-g++ 15.2.1) / "nextpnr-ecp5" -- Next Generation Place and Route (Version nextpnr-0.11.1-18-gdec04b3b)
+== device 45k package CABGA381
+== the engine is built with ULTRA 0, which maps its buffers to block RAM instead of UltraRAM
+
+== eng
+Info: 	              DP16KD:      40/    108    37%
+Info: 	          MULT18X18D:       0/     72     0%
+Info: 	              ALU54B:       0/     36     0%
+Info: 	          TRELLIS_FF:    2236/  43848     5%
+Info: 	        TRELLIS_COMB:    8111/  43848    18%
+
+== glue
+Info: 	              DP16KD:       1/    108     0%
+Info: 	          MULT18X18D:       0/     72     0%
+Info: 	              ALU54B:       0/     36     0%
+Info: 	          TRELLIS_FF:    6116/  43848    13%
+Info: 	        TRELLIS_COMB:    4663/  43848    10%
+

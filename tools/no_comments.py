@@ -5,6 +5,8 @@ usage: python3 tools/no_comments.py [ROOT]
 
 This repository states what its code does in the code, in docs/ and in results/, never in comments.
 The rule is absolute for .c, .h, .py, .sh, .tcl, .v and .dtso files, and CI runs this on every push.
+Inside a git checkout it reads what git would commit, tracked files and new files .gitignore does not
+exclude, so local build output never counts; anywhere else it walks the whole directory.
 
 What is not a comment and is left alone: a shebang line; a C or Verilog preprocessor directive
 (#define, #include, `ifdef); a Python docstring; a Verilog attribute (* ... *); integer division //
@@ -15,6 +17,7 @@ exit 0 nothing found, 1 a comment was found, 2 a file could not be read.
 """
 import io
 import os
+import subprocess
 import sys
 import tokenize
 
@@ -154,25 +157,50 @@ def check(path):
     return []
 
 
-def main():
-    root = sys.argv[1] if len(sys.argv) > 1 else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    hits, files = 0, 0
+def walked(root):
     for base, dirs, names in os.walk(root):
         dirs[:] = [d for d in sorted(dirs) if d not in SKIP_DIRS]
         for name in sorted(names):
-            if not name.endswith(SUFFIXES):
-                continue
-            path = os.path.join(base, name)
-            files += 1
-            try:
-                found = check(path)
-            except OSError as exc:
-                print(f"cannot read {path}: {exc}", file=sys.stderr)
-                return 2
-            for number, snippet in found:
-                rel = os.path.relpath(path, root).replace(os.sep, "/")
-                print(f"{rel}:{number}: comment: {snippet}")
-                hits += 1
+            yield os.path.join(base, name)
+
+
+def listed(root):
+    try:
+        out = subprocess.run(
+            ["git", "-C", root, "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+            capture_output=True, check=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    paths = []
+    for rel in sorted(set(out.decode("utf-8", errors="replace").split("\0"))):
+        if not rel or any(part in SKIP_DIRS for part in rel.split("/")[:-1]):
+            continue
+        path = os.path.join(root, rel)
+        if os.path.isfile(path):
+            paths.append(path)
+    return paths
+
+
+def main():
+    root = sys.argv[1] if len(sys.argv) > 1 else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    paths = listed(root)
+    if paths is None:
+        paths = list(walked(root))
+    hits, files = 0, 0
+    for path in paths:
+        if not path.endswith(SUFFIXES):
+            continue
+        files += 1
+        try:
+            found = check(path)
+        except OSError as exc:
+            print(f"cannot read {path}: {exc}", file=sys.stderr)
+            return 2
+        for number, snippet in found:
+            rel = os.path.relpath(path, root).replace(os.sep, "/")
+            print(f"{rel}:{number}: comment: {snippet}")
+            hits += 1
     print(f"{files} files checked, {hits} comments found")
     return 1 if hits else 0
 
