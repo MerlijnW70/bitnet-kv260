@@ -1377,18 +1377,6 @@ static void scores_kt_tail(float *sc, const float *kt, const float *q, int from,
 }
 
 
-static float scores_i8(float *sc, const int8_t *K, const float *ks, const float *q, int T, int hd, float scaling)
-{
-    float mx = -INFINITY;
-    for (int t = 0; t < T; t++) {
-        const int8_t *kr = K + (size_t)t * hd;
-        float sk = ks[t], s = 0;
-        for (int d = 0; d < hd; d++) s += ((float)kr[d] * sk) * q[d];
-        sc[t] = s * scaling;
-        if (sc[t] > mx) mx = sc[t];
-    }
-    return mx;
-}
 
 static float scores_bf16(float *sc, const uint16_t *K, const float *q, int T, int hd, float scaling)
 {
@@ -1472,8 +1460,36 @@ static void accum_i8(float *out, const int8_t *V, const float *vs, const float *
 {
     for (int t = 0; t < T; t++) {
         const int8_t *vr = V + (size_t)t * hd;
-        float p = sc[t], s = vs[t];
-        for (int d = 0; d < hd; d++) out[d] += p * ((float)vr[d] * s);
+        float p = sc[t] * vs[t];
+        int d = 0;
+#ifdef __aarch64__
+        const float32x4_t pv = vdupq_n_f32(p);
+        for (; d + 16 <= hd; d += 16) {
+            const int8x16_t x = vld1q_s8(vr + d);
+            const int16x8_t lo = vmovl_s8(vget_low_s8(x)), hi = vmovl_s8(vget_high_s8(x));
+            vst1q_f32(out + d, vaddq_f32(vld1q_f32(out + d), vmulq_f32(vcvtq_f32_s32(vmovl_s16(vget_low_s16(lo))), pv)));
+            vst1q_f32(out + d + 4, vaddq_f32(vld1q_f32(out + d + 4), vmulq_f32(vcvtq_f32_s32(vmovl_s16(vget_high_s16(lo))), pv)));
+            vst1q_f32(out + d + 8, vaddq_f32(vld1q_f32(out + d + 8), vmulq_f32(vcvtq_f32_s32(vmovl_s16(vget_low_s16(hi))), pv)));
+            vst1q_f32(out + d + 12, vaddq_f32(vld1q_f32(out + d + 12), vmulq_f32(vcvtq_f32_s32(vmovl_s16(vget_high_s16(hi))), pv)));
+        }
+#endif
+        for (; d < hd; d++) out[d] += p * (float)vr[d];
+    }
+}
+
+static inline int32_t dot_i8(const int8_t *w, const int8_t *q, int k);
+
+static void scores_i8_group(float **scp, float *mx, const int8_t *K, const float *ks,
+                            const int8_t *qq, const float *qs, int nh, int tb, int tn, int hd)
+{
+    for (int t = 0; t < tn; t++) {
+        const int8_t *kr = K + (size_t)t * hd;
+        const float kt = ks[t];
+        for (int h = 0; h < nh; h++) {
+            const float v = (float)dot_i8(kr, qq + (size_t)h * hd, hd) * (kt * qs[h]);
+            scp[h][tb + t] = v;
+            if (v > mx[h]) mx[h] = v;
+        }
     }
 }
 
@@ -1499,6 +1515,11 @@ static void attn_worker(void *arg, int id, int nt)
             scp[h] = scb + (size_t)h * R.ctx;
             outp[h] = R.cur_out + (size_t)(hq + h) * hd;
         }
+        int8_t qq[ATT_MAXG * 256];
+        float qs[ATT_MAXG];
+        if (R.cache_dtype == CACHE_I8)
+            for (int h = 0; h < nh; h++)
+                qs[h] = scaling / absmax_int8(qq + (size_t)h * hd, R.cur_q + (size_t)(hq + h) * hd, hd);
         for (int tb = 0; tb < T; tb += ATT_TB) {
             const int tn = tb + ATT_TB < T ? ATT_TB : T - tb;
             if (R.cache_dtype == CACHE_F32) {
@@ -1526,14 +1547,14 @@ static void attn_worker(void *arg, int id, int nt)
                 for (int h = 0; h < nh; h++)
                     for (int j = 0; j < tn; j++)
                         if (scp[h][tb + j] > mx[h]) mx[h] = scp[h][tb + j];
+            } else if (R.cache_dtype == CACHE_I8) {
+                scores_i8_group(scp, mx, R.cache_k8 + vbase + (size_t)tb * hd, R.cache_ks + sbase + tb,
+                                qq, qs, nh, tb, tn, hd);
             } else {
                 for (int h = 0; h < nh; h++) {
                     float *sc = scp[h] + tb;
                     const float *q = R.cur_q + (size_t)(hq + h) * hd;
-                    float m = R.cache_dtype == CACHE_BF16
-                              ? scores_bf16(sc, R.cache_kb + vbase + (size_t)tb * hd, q, tn, hd, scaling)
-                              : scores_i8(sc, R.cache_k8 + vbase + (size_t)tb * hd,
-                                          R.cache_ks + sbase + tb, q, tn, hd, scaling);
+                    float m = scores_bf16(sc, R.cache_kb + vbase + (size_t)tb * hd, q, tn, hd, scaling);
                     if (m > mx[h]) mx[h] = m;
                 }
             }
@@ -2586,6 +2607,10 @@ static void alloc_run(int ctx, int cache_dtype)
         R.cache_kb = xmalloc(cells * 2);
         R.cache_vb = xmalloc(cells * 2);
     } else if (cache_dtype == CACHE_I8) {
+        if (M.head_dim > 256) {
+            fprintf(stderr, "bitnet_kria: the int8 cache takes a head dimension up to 256, this model has %d\n", M.head_dim);
+            exit(2);
+        }
         R.cache_k8 = xmalloc(cells);
         R.cache_v8 = xmalloc(cells);
         R.cache_ks = xmalloc(sizeof(float) * (size_t)M.layers * M.n_kv * ctx);

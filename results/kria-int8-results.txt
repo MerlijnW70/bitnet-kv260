@@ -1,0 +1,137 @@
+== generation by cache format, 22 new tokens after a repeated prompt (bitnet_kria_i8, context 2048)
+== stage check, new binary, float32 cache
+  two-stage      fabric argmax 5380, exact head 5380  same
+stage check: every integer stage exact, every float stage above its cosine floor, every top-1 the reference's
+prompt 250 ids, cache f32  250 tokens 12496.3 ms (20.01 tok/s), generated 22 1595.9 ms (13.79 tok/s)
+prompt 250 ids, cache bf16 250 tokens 10167.5 ms (24.59 tok/s), generated 22 1498.5 ms (14.68 tok/s)
+prompt 250 ids, cache i8   250 tokens 10192.5 ms (24.53 tok/s), generated 22 1399.9 ms (15.72 tok/s)
+prompt 1000 ids, cache f32  1000 tokens 77090.5 ms (12.97 tok/s), generated 22 2871.6 ms (7.66 tok/s)
+prompt 1000 ids, cache bf16 1000 tokens 69639.0 ms (14.36 tok/s), generated 22 2575.1 ms (8.54 tok/s)
+prompt 1000 ids, cache i8   1000 tokens 63088.1 ms (15.85 tok/s), generated 22 2361.8 ms (9.31 tok/s)
+prompt 1800 ids, cache f32  1800 tokens 200433.9 ms (8.98 tok/s), generated 22 4249.3 ms (5.18 tok/s)
+prompt 1800 ids, cache bf16 1800 tokens 178020.5 ms (10.11 tok/s), generated 22 3728.1 ms (5.90 tok/s)
+prompt 1800 ids, cache i8   1800 tokens 156298.1 ms (11.52 tok/s), generated 22 3350.2 ms (6.57 tok/s)
+
+== float32 attention scaling, same binary as shipped (context 2048)
+== prompt 250 ids
+done 22 12811.9
+prompt 250 tokens 11182.9 ms (22.36 tok/s), generated 22 1629.0 ms (13.51 tok/s)
+per forward over 271 (ms): engines qkv 2.099, o 1.504, gate+up 7.638, down 3.738 (14.979 together); activation loads 0.363; glue A 3.436 B 3.415; shift scan 3.632; sums out 2.896; attention 10.286; norms, quant, RoPE and residuals 4.520; waiting on the side thread 0.001; forward total 46.839. side thread busy 3.187 ms a forward (beats and the FFN scale, off the critical path). head 5.327 ms a call over 22 calls
+== prompt 500 ids
+done 22 30018.2
+prompt 500 tokens 28000.7 ms (17.86 tok/s), generated 22 2017.5 ms (10.90 tok/s)
+per forward over 521 (ms): engines qkv 2.010, o 1.392, gate+up 7.213, down 3.578 (14.193 together); activation loads 0.341; glue A 3.438 B 3.416; shift scan 2.888; sums out 3.002; attention 22.107; norms, quant, RoPE and residuals 4.731; waiting on the side thread 0.000; forward total 57.388. side thread busy 3.174 ms a forward (beats and the FFN scale, off the critical path). head 5.360 ms a call over 22 calls
+== prompt 1000 ids
+done 22 79539.4
+prompt 1000 tokens 76665.8 ms (13.04 tok/s), generated 22 2873.6 ms (7.66 tok/s)
+per forward over 1021 (ms): engines qkv 1.961, o 1.346, gate+up 6.992, down 3.491 (13.789 together); activation loads 0.328; glue A 3.439 B 3.415; shift scan 2.438; sums out 3.053; attention 43.013; norms, quant, RoPE and residuals 4.982; waiting on the side thread 0.000; forward total 77.788. side thread busy 3.171 ms a forward (beats and the FFN scale, off the critical path). head 5.289 ms a call over 22 calls
+== prompt 1800 ids
+done 22 205573.6
+prompt 1800 tokens 201300.7 ms (8.94 tok/s), generated 22 4272.9 ms (5.15 tok/s)
+per forward over 1821 (ms): engines qkv 1.940, o 1.323, gate+up 6.892, down 3.455 (13.609 together); activation loads 0.323; glue A 3.439 B 3.413; shift scan 2.875; sums out 3.059; attention 77.626; norms, quant, RoPE and residuals 5.127; waiting on the side thread 0.000; forward total 112.826. side thread busy 3.167 ms a forward (beats and the FFN scale, off the critical path). head 5.286 ms a call over 22 calls
+
+== whole-board energy at a 1000-token prompt, context 1100, page cache dropped before each run
+-- f32 run 1
+prompt 1000 tokens 77716.0 ms (12.87 tok/s), generated 22 2964.6 ms (7.42 tok/s)
+setup 53.200 s, prompt 77.760 s, generation 2.930 s, whole run 134.132 s
+1 idle-before    94 samples  power mean 3.826 W  min 3.800 W  max 3.870 W   mean 756 mA at 5.053 V
+3 prompt       1519 samples  power mean 5.340 W  min 3.860 W  max 5.660 W   mean 1057 mA at 5.053 V
+4 generation     57 samples  power mean 5.774 W  min 5.090 W  max 6.750 W   mean 1144 mA at 5.052 V
+-- f32 run 2
+prompt 1000 tokens 77551.8 ms (12.89 tok/s), generated 22 3081.3 ms (7.14 tok/s)
+setup 53.039 s, prompt 77.599 s, generation 3.035 s, whole run 133.919 s
+1 idle-before    93 samples  power mean 3.924 W  min 3.800 W  max 4.710 W   mean 777 mA at 5.053 V
+3 prompt       1516 samples  power mean 5.339 W  min 3.860 W  max 5.660 W   mean 1056 mA at 5.053 V
+4 generation     59 samples  power mean 5.711 W  min 4.840 W  max 6.680 W   mean 1129 mA at 5.053 V
+-- f32 run 3
+prompt 1000 tokens 77601.5 ms (12.89 tok/s), generated 22 3008.9 ms (7.31 tok/s)
+setup 53.522 s, prompt 77.648 s, generation 2.965 s, whole run 134.381 s
+1 idle-before    94 samples  power mean 3.843 W  min 3.810 W  max 4.280 W   mean 760 mA at 5.053 V
+3 prompt       1515 samples  power mean 5.341 W  min 3.850 W  max 5.650 W   mean 1057 mA at 5.052 V
+4 generation     58 samples  power mean 5.766 W  min 5.500 W  max 6.800 W   mean 1143 mA at 5.052 V
+-- i8 run 1
+prompt 1000 tokens 63974.1 ms (15.63 tok/s), generated 22 2474.8 ms (8.89 tok/s)
+setup 53.470 s, prompt 64.019 s, generation 2.432 s, whole run 120.132 s
+1 idle-before    94 samples  power mean 3.840 W  min 3.800 W  max 4.270 W   mean 759 mA at 5.053 V
+3 prompt       1250 samples  power mean 5.116 W  min 3.860 W  max 5.660 W   mean 1012 mA at 5.053 V
+4 generation     48 samples  power mean 5.604 W  min 5.290 W  max 6.850 W   mean 1109 mA at 5.053 V
+-- i8 run 2
+prompt 1000 tokens 63732.7 ms (15.69 tok/s), generated 22 2437.3 ms (9.03 tok/s)
+setup 53.150 s, prompt 63.780 s, generation 2.392 s, whole run 119.534 s
+1 idle-before    93 samples  power mean 3.940 W  min 3.800 W  max 4.670 W   mean 780 mA at 5.053 V
+3 prompt       1246 samples  power mean 5.115 W  min 3.870 W  max 5.630 W   mean 1012 mA at 5.053 V
+4 generation     47 samples  power mean 5.625 W  min 5.360 W  max 6.640 W   mean 1111 mA at 5.052 V
+-- i8 run 3
+prompt 1000 tokens 63564.6 ms (15.73 tok/s), generated 22 2423.4 ms (9.08 tok/s)
+setup 53.653 s, prompt 63.608 s, generation 2.382 s, whole run 119.856 s
+1 idle-before    94 samples  power mean 3.830 W  min 3.800 W  max 3.900 W   mean 757 mA at 5.053 V
+3 prompt       1243 samples  power mean 5.119 W  min 3.880 W  max 5.650 W   mean 1013 mA at 5.053 V
+4 generation     46 samples  power mean 5.670 W  min 4.840 W  max 6.680 W   mean 1123 mA at 5.052 V
+
+== earlier energy runs at context 2048 without dropping the page cache (memory pressure)
+-- e3-f32-1
+prompt 1000 tokens 77288.0 ms (12.94 tok/s), generated 22 2921.2 ms (7.53 tok/s)
+3 prompt       1508 samples  power mean 5.347 W  min 4.620 W  max 5.670 W   mean 1058 mA at 5.052 V
+4 generation     57 samples  power mean 5.795 W  min 5.280 W  max 6.660 W   mean 1144 mA at 5.053 V
+-- e3-i8-1
+prompt 1000 tokens 76700.7 ms (13.04 tok/s), generated 22 3363.8 ms (6.54 tok/s)
+3 prompt       1439 samples  power mean 5.084 W  min 4.530 W  max 5.700 W   mean 1005 mA at 5.053 V
+4 generation     65 samples  power mean 5.305 W  min 4.790 W  max 5.980 W   mean 1060 mA at 5.053 V
+-- e3-f32-2
+prompt 1000 tokens 123255.3 ms (8.11 tok/s), generated 22 4125.8 ms (5.33 tok/s)
+3 prompt       2348 samples  power mean 5.172 W  min 4.420 W  max 5.720 W   mean 1023 mA at 5.053 V
+4 generation     80 samples  power mean 5.451 W  min 5.030 W  max 6.750 W   mean 1073 mA at 5.053 V
+-- e3-i8-2
+prompt 1000 tokens 63751.5 ms (15.69 tok/s), generated 22 2352.9 ms (9.35 tok/s)
+3 prompt       1247 samples  power mean 5.122 W  min 4.520 W  max 5.640 W   mean 1014 mA at 5.053 V
+4 generation     45 samples  power mean 5.710 W  min 5.120 W  max 6.560 W   mean 1128 mA at 5.052 V
+
+== the published runtime/bitnet_kria.c built on the board
+== stage check
+stage check: every integer stage exact, every float stage above its cosine floor, every top-1 the reference's
+== battery float32 against shipped
+31 prompts, 2097 generated ids compared: ALL IDENTICAL
+1000-token prompt, cache f32  1000 tokens 76714.2 ms (13.04 tok/s), generated 22 3012.0 ms (7.30 tok/s)
+1000-token prompt, cache i8   1000 tokens 62410.8 ms (16.02 tok/s), generated 22 3931.7 ms (5.60 tok/s)
+i8   pub   1000 tokens 63107.3 ms (15.85 tok/s), generated 22 2419.1 ms (9.09 tok/s)
+f32  pub   1000 tokens 79164.0 ms (12.63 tok/s), generated 22 3027.2 ms (7.27 tok/s)
+i8   pub   1000 tokens 63133.8 ms (15.84 tok/s), generated 22 2337.2 ms (9.41 tok/s)
+i8   board 1000 tokens 63024.2 ms (15.87 tok/s), generated 22 2413.4 ms (9.12 tok/s)
+i8   pub   1000 tokens 62395.9 ms (16.03 tok/s), generated 22 3411.4 ms (6.45 tok/s)
+
+== 31 prompts, float32 against int8, same binary
+battery:q01_france              8 ids identical
+battery:q02_hamlet             11 ids identical
+battery:q03_crc32              65 vs   69 ids DIFFER, first at 54: 7524 vs 5505
+battery:q04_fpga              156 vs  160 ids DIFFER, first at 62: 264 vs 459
+battery:q05_sky                46 ids identical
+battery:q06_mul                 9 ids identical
+battery:q07_divadd             44 vs   43 ids DIFFER, first at 31: 902 vs 13239
+battery:q08_prime91            90 vs  160 ids DIFFER, first at 34: 763 vs 4815
+battery:q09_seq                36 ids identical
+battery:q10_syllogism          95 vs   94 ids DIFFER, first at 9: 13 vs 382
+battery:q11_wordproblem       106 vs  108 ids DIFFER, first at 11: 11879 vs 8250
+battery:q12_sortsize           12 ids identical
+battery:q13_onesentence        28 ids identical
+battery:q14_threeitems         19 ids identical
+battery:q15_yesno               3 ids identical
+battery:q16_summary            77 vs   77 ids DIFFER, first at 35: 30202 vs 11374
+battery:q17_haiku              21 vs   23 ids DIFFER, first at 11: 10107 vs 6
+battery:q18_shiftreg_child     57 vs   47 ids DIFFER, first at 31: 304 vs 555
+battery:q19_reverse           114 vs  119 ids DIFFER, first at 38: 28537 vs 502
+battery:q20_forloop           160 vs  160 ids DIFFER, first at 45: 1160 vs 4526
+battery:q21_nl_hoofdstad       83 vs   56 ids DIFFER, first at 21: 10079 vs 355
+battery:q22_nl_uitleg         160 vs  160 ids DIFFER, first at 108: 4815 vs 1901
+battery:q23_long              256 vs  256 ids DIFFER, first at 20: 7528 vs 35884
+battery:q24_determinism        20 vs  120 ids DIFFER, first at 7: 8026 vs 323
+battery:q25_emptyish           24 ids identical
+battery:q26_unicode           105 vs  109 ids DIFFER, first at 46: 11 vs 13
+bench:crc32                    77 vs   76 ids DIFFER, first at 7: 13882 vs 220
+bench:france                    8 ids identical
+bench:haiku                    21 vs   20 ids DIFFER, first at 6: 34 vs 54
+bench:shiftreg                128 vs  128 ids DIFFER, first at 72: 5044 vs 6500
+bench:sky                      58 ids identical
+31 prompts, 2288 generated ids compared: 19 PROMPTS DIFFER
+
+== 31 prompts, float32 of the new binary against the shipped ids
+31 prompts, 2097 generated ids compared: ALL IDENTICAL

@@ -110,6 +110,40 @@ board answers in 14,549.9 ms and 79.547 J a mean answer against bitnet.cpp's 77,
 400.552 J — **5.34× faster at 5.04× fewer joules an answer**. The fabric draws *more* watts (5.467
 against 5.155 mean) and uses five times fewer joules, because it is finished 5.34× sooner.
 
+## Long contexts and the int8 cache
+
+Attention runs on the A53s and reads the whole key/value cache for every token, so it waits on DDR:
+about 0.08 ms a token for every cached position. Generation, 22 new tokens after a repeated prompt,
+`results/kria-int8-results.txt`:
+
+| positions | float32 cache (default) | bf16 cache | **int8 cache** |
+|---|---|---|---|
+| 250 | 13.79 tok/s | 14.68 tok/s | **15.72 tok/s** |
+| 1000 | 7.66 tok/s | 8.54 tok/s | **9.31 tok/s** |
+| 1800 | 5.18 tok/s | 5.90 tok/s | **6.57 tok/s** |
+
+`--cache-dtype i8` quantises each query head once a token and scores it against the int8 keys with
+integer dot products, reading a quarter of the bytes float32 reads. Whole-board energy at a
+1000-token prompt, three runs each, page cache dropped before every run:
+
+| | float32 | int8 | |
+|---|---|---|---|
+| prompt | 12.88 tok/s at 5.340 W, **0.415 J a token** | 15.68 tok/s at 5.117 W, **0.326 J a token** | 21% fewer joules |
+| generation | 7.29 tok/s at 5.750 W, **0.789 J a token** | 9.00 tok/s at 5.633 W, **0.626 J a token** | 21% fewer joules |
+
+The generation window here is 22 tokens, about 2.4 s, and it is not always clean: of every int8 run
+at this prompt, 3 of 11 generated at 5.60 to 6.54 tok/s instead of about 9.1, and 1 of 9 float32
+runs at 5.33 instead of about 7.3. The prompt phase of the same runs, 63 s and 77 s of work, varied
+by under 2%. Every run is listed in `results/kria-int8-results.txt`.
+
+int8 is not bit-exact. Over the 31 prompts of `tools/quality_prompts.json` and the bench, 12 answers
+are identical and 19 differ; on reading them the differences are wording (144 / 12 + 7 is 19, the
+train arrives at 12:05 and 91 is composite in both). float32 stays the default and gives the
+recorded ids exactly.
+
+With `--context 2048` the float32 cache locks about 1.6 GB of the board's 3.9 GB and pushes the page
+cache out; the same run then varies by up to 40%. The int8 cache is a quarter of that size.
+
 ## Correctness
 
 | | measured | how |
