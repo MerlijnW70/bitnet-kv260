@@ -131,10 +131,14 @@ integer dot products, reading a quarter of the bytes float32 reads. Whole-board 
 | prompt | 12.88 tok/s at 5.340 W, **0.415 J a token** | 15.68 tok/s at 5.117 W, **0.326 J a token** | 21% fewer joules |
 | generation | 7.29 tok/s at 5.750 W, **0.789 J a token** | 9.00 tok/s at 5.633 W, **0.626 J a token** | 21% fewer joules |
 
-The generation window here is 22 tokens, about 2.4 s, and it is not always clean: of every int8 run
-at this prompt, 3 of 11 generated at 5.60 to 6.54 tok/s instead of about 9.1, and 1 of 9 float32
-runs at 5.33 instead of about 7.3. The prompt phase of the same runs, 63 s and 77 s of work, varied
-by under 2%. Every run is listed in `results/kria-int8-results.txt`.
+Of every run at this prompt in `results/kria-int8-results.txt`, 3 of 11 int8 runs generated at 5.60
+to 6.54 tok/s and 1 of 9 float32 runs at 5.33. The cause was the measurement, not the runtime: every
+dip began in the second a new SSH login reached the board, and on the Ubuntu desktop image a login
+starts a user session (PulseAudio, snapd-desktop-integration, portals) that takes about 15,000
+context switches and 18% system time for a few seconds. Traced token by token, the same eight runs
+with the waiting side polling over fresh logins had tokens of up to 382 ms; with one SSH connection
+held open and no new logins, no token took over 165 ms, float32 averaged 136.5 to 141.4 ms a token and
+int8 109.5 to 114.0 ms (`results/kria-dip-traces.txt`). Measure with nothing logging in.
 
 int8 is not bit-exact. Over the 31 prompts of `tools/quality_prompts.json` and the bench, 12 answers
 are identical and 19 differ; on reading them the differences are wording (144 / 12 + 7 is 19, the
