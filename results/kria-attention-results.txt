@@ -93,3 +93,12 @@ run's generated tokens. Without the cap a request asking for 64 tokens still ran
 and two concurrent requests measured SLOWER than one (8.97 against 15.40 tok/s aggregate).
 The batch table above is taken with --gen-batch-fill, which restores the older reading where a
 single prompt fills every slot.
+
+== the endpoint checked end to end (tools/api_check.py, run from a PC over the network)
+21 checks passed: routes, chat and text completions, the chat template with a system message,
+streaming frames, max_tokens honoured with finish_reason length, bad json / empty messages /
+over-long prompt all refused, and the concurrency comparison.
+  one alone     64 tokens in 6.11 s = 10.47 tok/s aggregate, client side
+  two at once  128 tokens in 8.56 s = 14.96 tok/s aggregate, 1.43x
+The server's own figures for the same two runs were 15.45 and 19.67 tok/s, 1.27x: a client also
+pays its connection and transfer once a request, so grouping gains it more than it gains the board.
