@@ -31,6 +31,16 @@ if [ "$which" = both ] || [ "$which" = glue ]; then
     check tb_ternary_glue glue.log "0 wrong, 0 protocol faults"
 fi
 
+if [ "$which" = both ] || [ "$which" = attention ]; then
+    echo
+    echo "== tb_attn_fx_axi (the attention engine against fxmodel.py, whole layers of twenty heads)"
+    python3 genlayers.py attn_layers.txt "${ATTN_LAYERS:-12}"
+    iverilog -g2012 -o attn.vvp tb_attn_fx_axi.v attn_fx_axi.v attn_fx_v3.v
+    vvp -n attn.vvp > attn.log 2>&1 || true
+    cat attn.log
+    check tb_attn_fx_axi attn.log "top 0 wrong, sum 0 wrong, acc 0 wrong, tlast 0 wrong"
+fi
+
 echo
 if [ $rc = 0 ]; then echo "RTL testbenches passed."
 else echo "An RTL testbench FAILED; its whole output is in the .log file here."; fi

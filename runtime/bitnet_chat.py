@@ -11,7 +11,7 @@ usage (on the board, as root because bitnet_kria opens /dev/mem):
   sudo python3 bitnet_chat.py --check tokencheck.json  the tokenizer against ids from the PC
 
 options: --dir DIR (default /home/ubuntu/bitnet-kria), --exe PATH, --max-new N, --context N,
-         --threads N, --cache-dtype f32|bf16|i8, --head auto|fabric|arm, --temp T, --top-p P, --seed N,
+         --threads N, --cache-dtype f32|bf16|i8|fx|fab, --head auto|fabric|arm, --temp T, --top-p P, --seed N,
          --timing, --system TEXT, --no-stream, --quiet
 in the interactive loop: /reset starts a new conversation, /quit leaves.
 
@@ -214,7 +214,8 @@ def main(argv=None):
     ap.add_argument("--max-new", type=int, default=256)
     ap.add_argument("--context", type=int, default=2048)
     ap.add_argument("--threads", type=int, default=4)
-    ap.add_argument("--cache-dtype", default="f32", choices=("f32", "bf16", "i8"))
+    ap.add_argument("--cache-dtype", default="f32", choices=("f32", "bf16", "i8", "fx", "fab"))
+    ap.add_argument("--attn-ports", type=int, default=0)
     ap.add_argument("--temp", type=float, default=0.0)
     ap.add_argument("--top-p", type=float, default=1.0)
     ap.add_argument("--seed", type=int, default=1)
@@ -241,6 +242,8 @@ def main(argv=None):
     head = a.head if a.head != "auto" else pick_head(a.dir)
     cmd = [exe, "--dir", a.dir, "--max-new", str(a.max_new), "--context", str(a.context),
            "--threads", str(a.threads), "--cache-dtype", a.cache_dtype, "--head", head]
+    if a.attn_ports:
+        cmd += ["--attn-ports", str(a.attn_ports)]
     if a.temp > 0:
         cmd += ["--temp", str(a.temp), "--top-p", str(a.top_p), "--seed", str(a.seed)]
     if a.timing:

@@ -84,6 +84,19 @@ jobs:
       - name: tb_ternary_matvec
         run: ./hardware/run-testbenches.sh matvec
 
+  attention:
+    name: the attention engine in simulation
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install icarus verilog
+        run: sudo apt-get update && sudo apt-get install -y iverilog
+
+      - name: tb_attn_fx_axi
+        run: ./hardware/run-testbenches.sh attention
+
   glue:
     name: the ffn glue in simulation
     runs-on: ubuntu-latest

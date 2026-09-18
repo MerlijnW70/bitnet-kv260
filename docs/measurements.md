@@ -148,6 +148,43 @@ recorded ids exactly.
 With `--context 2048` the float32 cache locks about 1.6 GB of the board's 3.9 GB and pushes the page
 cache out; the same run then varies by up to 40%. The int8 cache is a quarter of that size.
 
+## Attention in the fabric
+
+`--cache-dtype fab` hands attention to two engines in the fabric, beside the matvec engines they share
+their DMA with. A layer sends each port a header (the pass, its share of the positions, the twenty
+query factors and query rows, and the maxima) and then its range of the key/value blocks, and reads
+back the maxima, then the weight sums and accumulators; the ARM only divides. The arithmetic is
+`--cache-dtype fx`'s, in integers: Q12 scores from int8 keys and a once-a-token int8 query, softmax
+weights from a 4096-entry exp table times a 21-entry one in 20 bits cut off 20 logits under the head's
+best score, and values summed as `((w * vscale16) >> 16) * v8`. `results/kria-attention-results.txt`.
+
+| a 1000-token prompt | prompt | generation | energy a generated token |
+|---|---|---|---|
+| float32 on the A53s | 9.57 tok/s | 5.21 tok/s | |
+| int8 on the A53s | 16.4 tok/s | 9.09 tok/s | 5.97 W, **0.657 J** |
+| **the fabric** | **23.7 tok/s** | **15.2 tok/s** | 6.78 W, **0.446 J** |
+
+| an 1800-token prompt | prompt | generation | attention a forward |
+|---|---|---|---|
+| float32 on the A53s | 8.98 tok/s | 5.18 tok/s | 74.7 ms |
+| int8 on the A53s | 12.01 tok/s | 6.50 tok/s | 50.7 ms |
+| **the fabric** | **21.72 tok/s** | **13.03 tok/s** | **13.5 ms** |
+
+Three runs of each at the 1000-token prompt with the page cache dropped: prompt energy 0.331 -> 0.241 J
+a token, generation 0.657 -> 0.446 J. The two engines cost 0.27 W at rest (idle 3.83 -> 4.10 W) and
+more while they run; a token still ends up a third cheaper because it is over sooner.
+
+The fabric answers what `fx` answers, every token: over the 31 battery prompts the ids are identical,
+2198 of them, and against float32 they differ on the same 19 prompts int8 differs on. The float32 path
+is untouched by this bitstream: the stage check passes and the battery gives the recorded 2097 ids.
+
+The engine is `hardware/attn_fx_v3.v` (five key/value groups of four query heads, one set of
+multipliers shared across the groups, accumulators in distributed RAM), wrapped for the stream by
+`hardware/attn_fx_axi.v` and put beside the matvec engine by `hardware/ternary_port_axi.v`, which
+switches the DMA between them on bit 15 of the port's GPIO. `hardware/tb_attn_fx_axi.v` checks it
+against `hardware/fxmodel.py` layer by layer, and CI runs that on every push. Two of the four ports
+carry one: three do not fit, 89.9% of the LUTs and 0.9 ns short of the clock.
+
 ## Correctness
 
 | | measured | how |

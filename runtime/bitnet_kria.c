@@ -1164,6 +1164,16 @@ struct timings {
 #define CACHE_F32 0
 #define CACHE_BF16 1
 #define CACHE_I8 2
+#define CACHE_FX 3
+#define CACHE_FAB 4
+#define FAB_BLOCK 1312u
+#define FAB_HEADER 2688u
+#define OFF_ATT_HDR 0x200000u
+#define OFF_ATT_RES 0x280000u
+#define ATT_STRIDE 0x8000u
+#define ATT_SEL (1u << 15)
+static unsigned ATT_PORTS;
+static size_t FAB_BASE_OFF;
 
 struct run {
     int ctx;
@@ -1493,6 +1503,160 @@ static void scores_i8_group(float **scp, float *mx, const int8_t *K, const float
     }
 }
 
+#define FX_FRAC 12
+#define FX_CUT 20
+#define FX_ONE ((1u << 20) - 1)
+static uint32_t FX_EXPF[1 << FX_FRAC], FX_EXPI[FX_CUT + 1];
+static long FX_CLAMP[4][8];
+
+static void fx_tables(void)
+{
+    for (int f = 0; f < (1 << FX_FRAC); f++)
+        FX_EXPF[f] = (uint32_t)lrint((double)FX_ONE * exp(-(double)f / (double)(1 << FX_FRAC)));
+    for (int i = 0; i <= FX_CUT; i++)
+        FX_EXPI[i] = (uint32_t)lrint((double)FX_ONE * exp(-(double)i));
+}
+
+static uint32_t fx_u16(double x, long *clamped)
+{
+    long v = lrint(x * 65536.0);
+    if (v > 65535) { (*clamped)++; return 65535; }
+    return v < 0 ? 0 : (uint32_t)v;
+}
+
+static void fx_group(float **scp, float **outp, const int8_t *K, const float *ks, const int8_t *V,
+                     const float *vs, const int8_t *qq, const float *qs, int nh, int T, int hd, int id)
+{
+    uint32_t qf[ATT_MAXG];
+    int64_t top[ATT_MAXG];
+    for (int h = 0; h < nh; h++) {
+        long v = lrint((double)qs[h] * 1048576.0);
+        if (v > 65535) { FX_CLAMP[0][id]++; v = 65535; }
+        qf[h] = v < 0 ? 0 : (uint32_t)v;
+        top[h] = INT64_MIN;
+    }
+    for (int t = 0; t < T; t++) {
+        const int8_t *kr = K + (size_t)t * hd;
+        const int64_t k16 = fx_u16(ks[t], &FX_CLAMP[1][id]);
+        for (int h = 0; h < nh; h++) {
+            int64_t s = ((int64_t)dot_i8(kr, qq + (size_t)h * hd, hd) * k16 * (int64_t)qf[h]) >> (36 - FX_FRAC);
+            if (s > (1 << 23) - 1) { FX_CLAMP[3][id]++; s = (1 << 23) - 1; }
+            if (s < -(1 << 23)) { FX_CLAMP[3][id]++; s = -(1 << 23); }
+            scp[h][t] = (float)s;
+            if (s > top[h]) top[h] = s;
+        }
+    }
+    uint64_t sum[ATT_MAXG];
+    for (int h = 0; h < nh; h++) {
+        sum[h] = 0;
+        for (int t = 0; t < T; t++) {
+            int64_t d = top[h] - (int64_t)scp[h][t];
+            int64_t whole = d >> FX_FRAC;
+            uint32_t w = whole > FX_CUT
+                ? 0
+                : (uint32_t)(((uint64_t)FX_EXPF[d & ((1 << FX_FRAC) - 1)] * FX_EXPI[whole]) >> 20);
+            scp[h][t] = (float)w;
+            sum[h] += w;
+        }
+    }
+    int64_t acc[ATT_MAXG][256];
+    for (int h = 0; h < nh; h++)
+        for (int d = 0; d < hd; d++) acc[h][d] = 0;
+    for (int t = 0; t < T; t++) {
+        const int8_t *vr = V + (size_t)t * hd;
+        const uint64_t v16 = fx_u16(vs[t], &FX_CLAMP[2][id]);
+        for (int h = 0; h < nh; h++) {
+            const uint64_t w = (uint64_t)scp[h][t];
+            if (!w) continue;
+            const int64_t u = (int64_t)((w * v16) >> 16);
+            for (int d = 0; d < hd; d++) acc[h][d] += u * (int64_t)vr[d];
+        }
+    }
+    for (int h = 0; h < nh; h++)
+        for (int d = 0; d < hd; d++)
+            outp[h][d] = sum[h] ? (float)((double)acc[h][d] / (double)sum[h]) : 0.0f;
+}
+
+static uint32_t ATT_WORDS[4][5140];
+
+static int attn_fabric(void)
+{
+    const int hd = M.head_dim, T = R.cur_T, l = R.cur_layer, nq = M.n_q;
+    const unsigned P = ATT_PORTS < (unsigned)T ? ATT_PORTS : (unsigned)T;
+    const float scaling = 1.0f / sqrtf((float)hd);
+    uint8_t hdr[FAB_HEADER];
+    int8_t qq[20 * 128];
+    uint32_t qf[20];
+    int32_t top[20];
+    uint64_t sum[20];
+    int64_t acc[20 * 128];
+    unsigned k;
+    for (int h = 0; h < nq; h++) {
+        long v = lrint((double)(scaling / absmax_int8(qq + h * hd, R.cur_q + h * hd, hd)) * 1048576.0);
+        qf[h] = v > 65535 ? 65535u : v < 0 ? 0u : (uint32_t)v;
+        top[h] = INT32_MIN;
+        sum[h] = 0;
+    }
+    memset(acc, 0, sizeof acc);
+    for (unsigned pass = 0; pass < 2; pass++) {
+        const size_t words = pass ? 5140u : 20u;
+        memset(hdr, 0, sizeof hdr);
+        hdr[0] = 0x7E; hdr[1] = 0xA7; hdr[2] = (uint8_t)pass;
+        for (int h = 0; h < nq; h++) {
+            hdr[16 + 2 * h] = (uint8_t)qf[h];
+            hdr[17 + 2 * h] = (uint8_t)(qf[h] >> 8);
+            uint32_t t24 = (uint32_t)top[h] & 0xFFFFFFu;
+            hdr[64 + 3 * h] = (uint8_t)t24;
+            hdr[65 + 3 * h] = (uint8_t)(t24 >> 8);
+            hdr[66 + 3 * h] = (uint8_t)(t24 >> 16);
+        }
+        memcpy(hdr + 128, qq, (size_t)nq * (size_t)hd);
+        for (k = 0; k < P; k++) {
+            const unsigned n = (k + 1) * (unsigned)T / P - k * (unsigned)T / P;
+            hdr[4] = (uint8_t)n;
+            hdr[5] = (uint8_t)(n >> 8);
+            copy_in(B1.va + OFF_ATT_HDR + k * ATT_STRIDE, hdr, FAB_HEADER);
+        }
+        for (k = 0; k < P; k++) {
+            wr(gpio[k], GPIO_DATA, ATT_SEL);
+            s2mm_start(k, B1.phys + OFF_ATT_RES + k * ATT_STRIDE, words * 4u);
+            mm2s_start(k, B1.phys + OFF_ATT_HDR + k * ATT_STRIDE, FAB_HEADER);
+        }
+        for (k = 0; k < P; k++)
+            if (wait_ioc(k, MM2S_DMASR, "attention header")) return -1;
+        for (k = 0; k < P; k++) {
+            const unsigned first = k * (unsigned)T / P, n = (k + 1) * (unsigned)T / P - first;
+            mm2s_start(k, B0.phys + FAB_BASE_OFF + ((uint64_t)l * (uint64_t)R.ctx + first) * FAB_BLOCK,
+                       (size_t)n * FAB_BLOCK);
+        }
+        for (k = 0; k < P; k++)
+            if (wait_ioc(k, MM2S_DMASR, "attention cache")) return -1;
+        for (k = 0; k < P; k++)
+            if (wait_ioc(k, S2MM_DMASR, "attention answers")) return -1;
+        for (k = 0; k < P; k++) {
+            copy_out(ATT_WORDS[k], &B1, OFF_ATT_RES + k * ATT_STRIDE, words * 4u);
+            for (int h = 0; h < nq; h++) {
+                if (!pass) {
+                    int32_t t = (int32_t)ATT_WORDS[k][h];
+                    if (t > top[h]) top[h] = t;
+                } else {
+                    sum[h] += ATT_WORDS[k][h];
+                    for (int d = 0; d < hd; d++) {
+                        const size_t e = 20u + 2u * ((size_t)h * (size_t)hd + (size_t)d);
+                        acc[h * hd + d] += (int64_t)(((uint64_t)(int64_t)(int32_t)ATT_WORDS[k][e + 1] << 32)
+                                                     | ATT_WORDS[k][e]);
+                    }
+                }
+            }
+        }
+    }
+    for (k = 0; k < P; k++) wr(gpio[k], GPIO_DATA, 0);
+    for (int h = 0; h < nq; h++)
+        for (int d = 0; d < hd; d++)
+            R.cur_out[h * hd + d] = sum[h] ? (float)((double)acc[h * hd + d] / (double)sum[h]) : 0.0f;
+    return 0;
+}
+
 static void attn_worker(void *arg, int id, int nt)
 {
     (void)arg;
@@ -1517,9 +1681,15 @@ static void attn_worker(void *arg, int id, int nt)
         }
         int8_t qq[ATT_MAXG * 256];
         float qs[ATT_MAXG];
-        if (R.cache_dtype == CACHE_I8)
+        if (R.cache_dtype == CACHE_I8 || R.cache_dtype == CACHE_FX)
             for (int h = 0; h < nh; h++)
                 qs[h] = scaling / absmax_int8(qq + (size_t)h * hd, R.cur_q + (size_t)(hq + h) * hd, hd);
+        if (R.cache_dtype == CACHE_FX) {
+            fx_group(scp, outp, R.cache_k8 + vbase, R.cache_ks + sbase, R.cache_v8 + vbase, R.cache_vs + sbase,
+                     qq, qs, nh, T, hd, id);
+            hq = end;
+            continue;
+        }
         for (int tb = 0; tb < T; tb += ATT_TB) {
             const int tn = tb + ATT_TB < T ? ATT_TB : T - tb;
             if (R.cache_dtype == CACHE_F32) {
@@ -1999,7 +2169,25 @@ static void qkv_post_worker(void *arg, int id, int nt)
             for (int d = 0; d < hd; d++) { kg[d] = bf16_dec(bf16_enc(kg[d])); vg[d] = bf16_dec(bf16_enc(vg[d])); }
             for (int d = 0; d < hd; d++) R.cache_kb[vbase + d] = bf16_enc(kg[d]);
             for (int d = 0; d < hd; d++) R.cache_vb[vbase + d] = bf16_enc(vg[d]);
-        } else if (R.cache_dtype == CACHE_I8) {
+        } else if (R.cache_dtype == CACHE_FAB) {
+            const size_t blk = FAB_BASE_OFF + ((size_t)l * (size_t)R.ctx + (size_t)pos) * FAB_BLOCK;
+            int8_t row[256];
+            uint8_t two[2];
+            long clamped = 0;
+            uint32_t s16 = fx_u16(1.0f / absmax_int8(row, kg, hd), &clamped);
+            copy_in(B0.va + blk + 32u + (size_t)g * (size_t)hd, row, (size_t)hd);
+            two[0] = (uint8_t)s16; two[1] = (uint8_t)(s16 >> 8);
+            copy_in(B0.va + blk + 2u * (size_t)g, two, 2);
+            s16 = fx_u16(1.0f / absmax_int8(row, vg, hd), &clamped);
+            copy_in(B0.va + blk + 32u + (size_t)(M.n_kv + g) * (size_t)hd, row, (size_t)hd);
+            two[0] = (uint8_t)s16; two[1] = (uint8_t)(s16 >> 8);
+            copy_in(B0.va + blk + 16u + 2u * (size_t)g, two, 2);
+            if (g == 0) {
+                static const uint8_t pad[6] = {0, 0, 0, 0, 0, 0};
+                copy_in(B0.va + blk + 10u, pad, 6);
+                copy_in(B0.va + blk + 26u, pad, 6);
+            }
+        } else if (R.cache_dtype == CACHE_I8 || R.cache_dtype == CACHE_FX) {
             const size_t sbase = ((size_t)l * M.n_kv + (size_t)g) * (size_t)R.ctx + (size_t)pos;
             R.cache_ks[sbase] = 1.0f / absmax_int8(R.cache_k8 + vbase, kg, hd);
             R.cache_vs[sbase] = 1.0f / absmax_int8(R.cache_v8 + vbase, vg, hd);
@@ -2134,7 +2322,11 @@ static int forward_n(const int *tok, int pos0, int nb, int nlayers)
 
             t0 = now_ms();
             R.cur_layer = l; R.cur_T = pos0 + b + 1; R.cur_q = R.qf; R.cur_out = R.attn;
-            parallel_for(attn_worker, 0);
+            if (R.cache_dtype == CACHE_FAB) {
+                if (attn_fabric()) { print_dma_status(); return 3; }
+            } else {
+                parallel_for(attn_worker, 0);
+            }
             R.t.attn += now_ms() - t0;
             if (trace) memcpy(SINK.l0_attn_out, R.attn, sizeof(float) * H);
 
@@ -2606,7 +2798,25 @@ static void alloc_run(int ctx, int cache_dtype)
     if (cache_dtype == CACHE_BF16) {
         R.cache_kb = xmalloc(cells * 2);
         R.cache_vb = xmalloc(cells * 2);
-    } else if (cache_dtype == CACHE_I8) {
+    } else if (cache_dtype == CACHE_FAB) {
+        if (!ATT_PORTS) {
+            const char *env = getenv("ATTN_PORTS");
+            ATT_PORTS = env ? (unsigned)atoi(env) : 2u;
+        }
+        if (M.head_dim != 128 || M.n_kv != 5 || M.n_q != 20 || ATT_PORTS < 1 || ATT_PORTS > 4 || ctx > 65535) {
+            fprintf(stderr, "bitnet_kria: --cache-dtype fab wants head_dim 128, 5 key/value heads, 20 query heads, "
+                            "--attn-ports 1..4 and a context under 65536\n");
+            exit(2);
+        }
+        fx_tables();
+        FAB_BASE_OFF = (M.model_bytes + 0xFFFFFu) & ~(size_t)0xFFFFFu;
+        const size_t need = FAB_BASE_OFF + (size_t)M.layers * (size_t)ctx * FAB_BLOCK;
+        if (need > B0.size) {
+            fprintf(stderr, "bitnet_kria: the cache blocks need %zu bytes of %s, which has %zu\n", need, B0.dev, B0.size);
+            exit(2);
+        }
+    } else if (cache_dtype == CACHE_I8 || cache_dtype == CACHE_FX) {
+        if (cache_dtype == CACHE_FX) fx_tables();
         if (M.head_dim > 256) {
             fprintf(stderr, "bitnet_kria: the int8 cache takes a head dimension up to 256, this model has %d\n", M.head_dim);
             exit(2);
@@ -2800,7 +3010,7 @@ int main(int argc, char **argv)
     int head_k = 256, head_chunks = 8, gu_chunks = 2;
     uint64_t gpio_base = 0xA0000000ull, dma_base = 0xA0040000ull, stride = 0x10000ull;
     uint64_t ga = 0xA0080000ull, gb = 0xA0090000ull, gd = 0xA00A0000ull;
-    int max_new = 64, ctx = 2048, threads = 4, cache_dtype = CACHE_F32, timing = 0, quiet = 0;
+    int max_new = 64, ctx = 2048, threads = 4, cache_dtype = CACHE_F32, timing = 0, quiet = 0, ignore_eos = 0;
     unsigned pbatch = BMAX;
     int check_layers = -1, verify_weights = 0, layers_opt = -1, lock_head = 1;
     double temp = 0, top_p = 1.0;
@@ -2810,6 +3020,7 @@ int main(int argc, char **argv)
         const char *k = argv[a], *v = a + 1 < argc ? argv[a + 1] : 0;
         if (!strcmp(k, "--timing")) timing = 1;
         else if (!strcmp(k, "--quiet")) quiet = 1;
+        else if (!strcmp(k, "--ignore-eos")) ignore_eos = 1;
         else if (!strcmp(k, "--verify-weights")) verify_weights = 1;
         else if (!strcmp(k, "--no-mlock")) lock_head = 0;
         else if (!v) return usage();
@@ -2819,6 +3030,7 @@ int main(int argc, char **argv)
         else if (!strcmp(k, "--buf2")) buf2 = v, a++;
         else if (!strcmp(k, "--head")) head_mode = v, a++;
         else if (!strcmp(k, "--head-k")) head_k = atoi(v), a++;
+        else if (!strcmp(k, "--attn-ports")) ATT_PORTS = (unsigned)atoi(v), a++;
         else if (!strcmp(k, "--head-chunks")) head_chunks = atoi(v), a++;
         else if (!strcmp(k, "--gu-chunks")) gu_chunks = atoi(v), a++;
         else if (!strcmp(k, "--prompt-batch")) {
@@ -2841,6 +3053,8 @@ int main(int argc, char **argv)
             if (!strcmp(v, "f32")) cache_dtype = CACHE_F32;
             else if (!strcmp(v, "bf16")) cache_dtype = CACHE_BF16;
             else if (!strcmp(v, "i8")) cache_dtype = CACHE_I8;
+            else if (!strcmp(v, "fx")) cache_dtype = CACHE_FX;
+            else if (!strcmp(v, "fab")) cache_dtype = CACHE_FAB;
             else { fprintf(stderr, "bitnet_kria: --cache-dtype takes f32, bf16 or i8, not %s\n", v); return 2; }
             a++;
         }
@@ -3121,8 +3335,11 @@ int main(int argc, char **argv)
         printf("  engines at 0x%010" PRIx64 " + i*0x%" PRIx64 ", DMAs at 0x%010" PRIx64 "; glue GPIO 0x%010" PRIx64 " params 0x%010" PRIx64 " DMA 0x%010" PRIx64 "\n",
                gpio_base, stride, dma_base, ga, gb, gd);
         {
-            const char *cn = cache_dtype == CACHE_BF16 ? "bf16" : cache_dtype == CACHE_I8 ? "int8" : "float32";
-            double bytes = cache_dtype == CACHE_BF16 ? 2.0 : cache_dtype == CACHE_I8 ? 1.0 : 4.0;
+            const char *cn = cache_dtype == CACHE_BF16 ? "bf16" : cache_dtype == CACHE_I8 ? "int8"
+                             : cache_dtype == CACHE_FX ? "int8, fixed-point attention"
+                             : cache_dtype == CACHE_FAB ? "int8 blocks, attention in the fabric" : "float32";
+            double bytes = cache_dtype == CACHE_BF16 ? 2.0
+                           : cache_dtype == CACHE_I8 || cache_dtype == CACHE_FX || cache_dtype == CACHE_FAB ? 1.0 : 4.0;
             double mb = (double)M.layers * M.n_kv * ctx * M.head_dim * bytes * 2 / 1e6;
             if (cache_dtype == CACHE_F32)
                 mb = (double)M.layers * (R.kt_layer + R.v_layer) * 4 / 1e6;
@@ -3294,7 +3511,7 @@ int main(int argc, char **argv)
                 printf("%d\n", nxt);
                 fflush(stdout);
                 made++;
-                if (nxt == 128001 || nxt == 128009) break;
+                if (!ignore_eos && (nxt == 128001 || nxt == 128009)) break;
                 if (R.pos >= ctx) break;
                 if (forward(nxt, R.pos, M.layers)) return 3;
                 R.pos++;

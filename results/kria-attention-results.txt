@@ -1,0 +1,19 @@
+== the 31-prompt battery, attention in the fabric against the fx model (250 MHz)
+bench:shiftreg                128 ids identical
+bench:sky                      58 ids identical
+31 prompts, 2198 generated ids compared: ALL IDENTICAL
+
+== the same battery against the float32 cache
+31 prompts, 2244 generated ids compared: 19 PROMPTS DIFFER
+
+== speed, 1000-token prompt
+i8   1 prompt 1000 tokens 61121.7 ms (16.36 tok/s), generated 22 2362.7 ms (9.31 tok/s)  4.117 W   5.428 W   6.017 W 
+i8   2 prompt 1000 tokens 61113.9 ms (16.36 tok/s), generated 22 2472.8 ms (8.90 tok/s)  4.104 W   5.421 W   5.939 W 
+i8   3 prompt 1000 tokens 60969.1 ms (16.40 tok/s), generated 22 2425.2 ms (9.07 tok/s)  4.107 W   5.421 W   5.958 W 
+fab  1 prompt 1000 tokens 42136.3 ms (23.73 tok/s), generated 22 1447.5 ms (15.20 tok/s)  4.102 W   5.715 W   6.780 W 
+fab  2 prompt 1000 tokens 42133.8 ms (23.73 tok/s), generated 22 1431.3 ms (15.37 tok/s)  4.106 W   5.716 W   6.781 W 
+fab  3 prompt 1000 tokens 42150.4 ms (23.72 tok/s), generated 22 1459.5 ms (15.07 tok/s)  4.102 W   5.716 W   6.771 W 
+
+== 1800-token prompt, one run each
+i8   prompt 12.01 tok/s, generated 6.50 tok/s, attention 50.717 ms a forward
+fab  prompt 21.72 tok/s, generated 13.03 tok/s, attention 13.549 ms a forward
