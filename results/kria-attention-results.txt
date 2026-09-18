@@ -41,3 +41,23 @@ fab16 3 prompt 38824.4 ms (25.76 tok/s), gen 22 1453.4 ms (15.14 tok/s)  4.141 W
 64 generated tokens, cache fab, 2 ports
   1000-token prompt: prompt 24.82 tok/s, generated 14.95 tok/s, forward total 41.564 ms
   1800-token prompt: prompt 22.95 tok/s, generated 13.87 tok/s, forward total 44.368 ms
+
+== generation over several sequences at once (--gen-batch)
+A generated token reads 417.5 MB of weights and 65.7 MB for the head; at 11.9 GB/s that is about
+40 of its 58 ms, so single-stream generation sits on the DDR ceiling.  --gen-batch N puts N
+sequences in the engines' slots and the weight stream is read once for the group; every sequence
+keeps its own cache, attention, glue passes and head.
+
+correctness
+  --gen-batch 1 against the shipped runtime, 32 tokens: identical
+  --gen-batch 2, one prompt in both slots, 64 tokens: both identical to that prompt alone
+  --gen-batch 2, two different prompts: each slot identical to that prompt alone
+  the 31-prompt battery on float32: 2097 generated ids, ALL IDENTICAL
+
+speed and power, 250-token prompt, context 1024, three runs each
+  gen-batch 1  18.43 / 18.57 / 18.70 tok/s   6.788 / 6.844 / 6.851 W   0.3677 J a token
+  gen-batch 2  23.85 / 23.74 / 23.65 tok/s   6.414 / 6.427 / 6.505 W   0.2716 J a token
+  generation +27.9%, a token -26.1% of its energy, 2.72 -> 3.68 tok/J
+
+A sequence's cache is layers x ctx x 1312 bytes, 80.6 MB at 2048 positions, and udmabuf0 has about
+107 MB free after the weights: two sequences want 1024 positions each.

@@ -1184,7 +1184,11 @@ struct run {
     int8_t *cache_k8, *cache_v8;
     float *cache_ks, *cache_vs;
     int pos;
+    int slot_pos[BMAX], slot_seq[BMAX];
+    int cur_seq, nseq;
+    size_t fab_seq;
     float *hb;
+    float *finb;
     int32_t *sqkv, *soi, *sgu, *sd;
     float *h, *x, *xa, *attn, *qf, *kf, *vf, *fin, *ffn;
     int8_t *q8_in;
@@ -1626,7 +1630,8 @@ static int attn_fabric(void)
             if (wait_ioc(k, MM2S_DMASR, "attention header")) return -1;
         for (k = 0; k < P; k++) {
             const unsigned first = k * (unsigned)T / P, n = (k + 1) * (unsigned)T / P - first;
-            mm2s_start(k, B0.phys + FAB_BASE_OFF + ((uint64_t)l * (uint64_t)R.ctx + first) * FAB_BLOCK,
+            mm2s_start(k, B0.phys + FAB_BASE_OFF + (uint64_t)R.cur_seq * R.fab_seq
+                          + ((uint64_t)l * (uint64_t)R.ctx + first) * FAB_BLOCK,
                        (size_t)n * FAB_BLOCK);
         }
         for (k = 0; k < P; k++)
@@ -2142,7 +2147,7 @@ static void side_ffn(void)
 struct qkvjob {
     const int32_t *qi, *ki, *vi;
     float scq, sck, scv;
-    int layer, pos;
+    int layer, pos, seq;
 };
 
 static struct qkvjob QJ;
@@ -2170,7 +2175,8 @@ static void qkv_post_worker(void *arg, int id, int nt)
             for (int d = 0; d < hd; d++) R.cache_kb[vbase + d] = bf16_enc(kg[d]);
             for (int d = 0; d < hd; d++) R.cache_vb[vbase + d] = bf16_enc(vg[d]);
         } else if (R.cache_dtype == CACHE_FAB) {
-            const size_t blk = FAB_BASE_OFF + ((size_t)l * (size_t)R.ctx + (size_t)pos) * FAB_BLOCK;
+            const size_t blk = FAB_BASE_OFF + (size_t)j->seq * R.fab_seq
+                             + ((size_t)l * (size_t)R.ctx + (size_t)pos) * FAB_BLOCK;
             int8_t row[256];
             uint8_t two[2];
             long clamped = 0;
@@ -2223,7 +2229,7 @@ static const int32_t *sums_slot(size_t off, unsigned n, int nb, int b, int32_t *
     return d;
 }
 
-static int forward_n(const int *tok, int pos0, int nb, int nlayers)
+static int forward_slots(const int *tok, int nb, int nlayers)
 {
     const int H = M.hidden, I = M.inter, hd = M.head_dim;
     double t_all = now_ms(), t0;
@@ -2252,7 +2258,7 @@ static int forward_n(const int *tok, int pos0, int nb, int nlayers)
 
     for (int b = 0; b < nb; b++)
         for (int d = 0; d < hd / 2; d++) {
-            double ang = (double)(pos0 + b) * R.inv_freq[d];
+            double ang = (double)R.slot_pos[b] * R.inv_freq[d];
             R.rope_cb[(size_t)b * (hd / 2) + d] = (float)cos(ang);
             R.rope_sb[(size_t)b * (hd / 2) + d] = (float)sin(ang);
         }
@@ -2308,7 +2314,8 @@ static int forward_n(const int *tok, int pos0, int nb, int nlayers)
             t0 = now_ms();
             R.rope_c = R.rope_cb + (size_t)b * (hd / 2);
             R.rope_s = R.rope_sb + (size_t)b * (hd / 2);
-            QJ.qi = qi; QJ.ki = ki; QJ.vi = vi; QJ.layer = l; QJ.pos = pos0 + b;
+            QJ.qi = qi; QJ.ki = ki; QJ.vi = vi; QJ.layer = l;
+            QJ.pos = R.slot_pos[b]; QJ.seq = R.slot_seq[b];
             QJ.scq = (float)M.mat[l][PROJ_Q].ws / sx[b];
             QJ.sck = (float)M.mat[l][PROJ_K].ws / sx[b];
             QJ.scv = (float)M.mat[l][PROJ_V].ws / sx[b];
@@ -2321,7 +2328,8 @@ static int forward_n(const int *tok, int pos0, int nb, int nlayers)
             R.t.norm += now_ms() - t0;
 
             t0 = now_ms();
-            R.cur_layer = l; R.cur_T = pos0 + b + 1; R.cur_q = R.qf; R.cur_out = R.attn;
+            R.cur_layer = l; R.cur_T = R.slot_pos[b] + 1; R.cur_q = R.qf; R.cur_out = R.attn;
+            R.cur_seq = R.slot_seq[b];
             if (R.cache_dtype == CACHE_FAB) {
                 if (attn_fabric()) { print_dma_status(); return 3; }
             } else {
@@ -2486,7 +2494,9 @@ static int forward_n(const int *tok, int pos0, int nb, int nlayers)
     }
 
     t0 = now_ms();
-    rmsnorm(R.fin, R.hb + (size_t)(nb - 1) * H, M.final_norm, H, M.eps);
+    for (int b = 0; b < nb; b++)
+        rmsnorm(R.finb + (size_t)b * H, R.hb + (size_t)b * H, M.final_norm, H, M.eps);
+    memcpy(R.fin, R.finb + (size_t)(nb - 1) * H, sizeof(float) * (size_t)H);
     R.t.norm += now_ms() - t0;
     R.t.total += now_ms() - t_all;
     R.t.tokens += nb;
@@ -2520,6 +2530,12 @@ static int forward_n(const int *tok, int pos0, int nb, int nlayers)
     }
 #endif
     return 0;
+}
+
+static int forward_n(const int *tok, int pos0, int nb, int nlayers)
+{
+    for (int b = 0; b < nb; b++) { R.slot_pos[b] = pos0 + b; R.slot_seq[b] = R.cur_seq; }
+    return forward_slots(tok, nb, nlayers);
 }
 
 static int forward(int token, int pos, int nlayers)
@@ -2810,9 +2826,12 @@ static void alloc_run(int ctx, int cache_dtype)
         }
         fx_tables();
         FAB_BASE_OFF = (M.model_bytes + 0xFFFFFu) & ~(size_t)0xFFFFFu;
-        const size_t need = FAB_BASE_OFF + (size_t)M.layers * (size_t)ctx * FAB_BLOCK;
+        R.fab_seq = (size_t)M.layers * (size_t)ctx * FAB_BLOCK;
+        const size_t need = FAB_BASE_OFF + (size_t)(R.nseq < 1 ? 1 : R.nseq) * R.fab_seq;
         if (need > B0.size) {
-            fprintf(stderr, "bitnet_kria: the cache blocks need %zu bytes of %s, which has %zu\n", need, B0.dev, B0.size);
+            fprintf(stderr, "bitnet_kria: %d sequence%s of %d positions need %zu bytes of %s, which has %zu: "
+                            "fewer with --gen-batch or a smaller --context\n",
+                    R.nseq < 1 ? 1 : R.nseq, R.nseq == 1 ? "" : "s", ctx, need, B0.dev, B0.size);
             exit(2);
         }
     } else if (cache_dtype == CACHE_I8 || cache_dtype == CACHE_FX) {
@@ -2852,6 +2871,7 @@ static void alloc_run(int ctx, int cache_dtype)
     R.kf = xmalloc(sizeof(float) * (size_t)M.kv_size);
     R.vf = xmalloc(sizeof(float) * (size_t)M.kv_size);
     R.fin = xmalloc(sizeof(float) * H);
+    R.finb = xmalloc(sizeof(float) * (size_t)H * BMAX);
     R.q8_in = xmalloc((size_t)I);
     R.gu = xmalloc(sizeof(int32_t) * (size_t)(2 * I));
     R.hglue = xmalloc(sizeof(int32_t) * (size_t)I);
@@ -2998,7 +3018,7 @@ static int usage(void)
                     "                          [--stride HEX] [--glue-gpio HEX] [--glue-params HEX]\n"
                     "                          [--glue-dma HEX] [--buf0 DEV] [--buf1 DEV] [--buf2 DEV]\n"
                     "                          [--head arm|fabric] [--head-k N] [--head-chunks N] [--gu-chunks N]\n"
-                    "                          [--prompt-batch 1..4]\n");
+                    "                          [--prompt-batch 1..4] [--gen-batch 1..4]\n");
     return 2;
 }
 
@@ -3011,7 +3031,7 @@ int main(int argc, char **argv)
     uint64_t gpio_base = 0xA0000000ull, dma_base = 0xA0040000ull, stride = 0x10000ull;
     uint64_t ga = 0xA0080000ull, gb = 0xA0090000ull, gd = 0xA00A0000ull;
     int max_new = 64, ctx = 2048, threads = 4, cache_dtype = CACHE_F32, timing = 0, quiet = 0, ignore_eos = 0;
-    unsigned pbatch = BMAX;
+    unsigned pbatch = BMAX, gbatch = 1;
     int check_layers = -1, verify_weights = 0, layers_opt = -1, lock_head = 1;
     double temp = 0, top_p = 1.0;
     unsigned seed = 1;
@@ -3037,6 +3057,12 @@ int main(int argc, char **argv)
             int pb = atoi(v);
             if (pb < 1 || pb > (int)BMAX) { fprintf(stderr, "bitnet_kria: --prompt-batch takes 1..%u, not %s\n", BMAX, v); return 2; }
             pbatch = (unsigned)pb;
+            a++;
+        }
+        else if (!strcmp(k, "--gen-batch")) {
+            int gb = atoi(v);
+            if (gb < 1 || gb > (int)BMAX) { fprintf(stderr, "bitnet_kria: --gen-batch takes 1..%u, not %s\n", BMAX, v); return 2; }
+            gbatch = (unsigned)gb;
             a++;
         }
         else if (!strcmp(k, "--stage-check")) stage_file = v, a++;
@@ -3314,6 +3340,12 @@ int main(int argc, char **argv)
     cache_line_size();
     pool_start(threads);
     side_start(threads > 1);
+    if (gbatch > 1 && cache_dtype != CACHE_FAB) {
+        fprintf(stderr, "bitnet_kria: --gen-batch over 1 wants --cache-dtype fab, which is the one cache "
+                        "that keeps a sequence's keys and values where the engines read them\n");
+        return 2;
+    }
+    R.nseq = (int)gbatch;
     alloc_run(ctx, cache_dtype);
     for (unsigned i = 0; i <= E; i++) if (dma_reset(i)) return 3;
     for (unsigned i = 0; i < E; i++) wr(gpio[i], GPIO_DATA, 0);
@@ -3470,11 +3502,12 @@ int main(int argc, char **argv)
         char *line = 0;
         size_t cap = 0;
         while (getline(&line, &cap, stdin) > 0) {
-            int ids[8192], n = 0;
+            int ids[8192], n = 0, cut[BMAX], ncut = 0;
             for (char *p = line; *p && n < 8192;) {
-                while (*p && (*p < '0' || *p > '9') && *p != '-') p++;
-                if (!*p) break;
-                ids[n++] = (int)strtol(p, &p, 10);
+                if (*p == ';') { if (ncut < (int)BMAX) cut[ncut++] = n; p++; continue; }
+                if (*p >= '0' && *p <= '9') { ids[n++] = (int)strtol(p, &p, 10); continue; }
+                if (*p == '-' && p[1] >= '0' && p[1] <= '9') { ids[n++] = (int)strtol(p, &p, 10); continue; }
+                p++;
             }
             if (n == 0) continue;
             memset(&R.t, 0, sizeof R.t);
@@ -3490,37 +3523,93 @@ int main(int argc, char **argv)
             pf_cpustat(PF_C0);
 #endif
             double t0 = now_ms();
+            const int S = R.nseq < 1 ? 1 : R.nseq;
+            const int H = M.hidden;
+            int spos[BMAX], stok[BMAX], sdone[BMAX], smade[BMAX];
+            int poff[BMAX], plen[BMAX];
             R.pos = 0;
             int last = -1;
-            for (int i = 0; i < n && R.pos < ctx; ) {
-                int nb = n - i;
-                if (nb > (int)pbatch) nb = (int)pbatch;
-                if (nb > ctx - R.pos) nb = ctx - R.pos;
-                if (forward_n(ids + i, R.pos, nb, M.layers)) return 3;
-                R.pos += nb;
-                i += nb;
+            for (int s = 0; s < S; s++) {
+                if (ncut == 0) { poff[s] = 0; plen[s] = n; }
+                else {
+                    const int start = s == 0 ? 0 : cut[s - 1];
+                    const int end = s < ncut ? cut[s] : n;
+                    poff[s] = start;
+                    plen[s] = (s <= ncut && end > start) ? end - start : 0;
+                }
+                if (plen[s] == 0) {
+                    fprintf(stderr, "bitnet_kria: --gen-batch %d wants %d prompts on the line, "
+                                    "semicolon between them, or one for all of them\n", S, S);
+                    return 2;
+                }
             }
-            double t_prompt = now_ms() - t0;
-            int npt = R.pos;
-            double t1 = now_ms();
-            int made = 0;
-            for (int i = 0; i < max_new && R.pos < ctx; i++) {
+            int npt_all = 0;
+            for (int s = 0; s < S; s++) {
+                const int *pids = ids + poff[s];
+                const int pn = plen[s];
+                R.cur_seq = s;
+                R.pos = 0;
+                for (int i = 0; i < pn && R.pos < ctx; ) {
+                    int nb = pn - i;
+                    if (nb > (int)pbatch) nb = (int)pbatch;
+                    if (nb > ctx - R.pos) nb = ctx - R.pos;
+                    if (forward_n(pids + i, R.pos, nb, M.layers)) return 3;
+                    R.pos += nb;
+                    i += nb;
+                }
+                npt_all += R.pos;
+                spos[s] = R.pos;
+                sdone[s] = 0;
+                smade[s] = 0;
                 int nxt = head_argmax();
                 if (temp > 0) nxt = sample_token(temp, top_p, &seed);
-                last = nxt;
-                printf("%d\n", nxt);
+                stok[s] = nxt;
+            }
+            double t_prompt = now_ms() - t0;
+            double t1 = now_ms();
+            int made = 0, alive = S;
+            for (int i = 0; i < max_new && alive > 0; i++) {
+                int slot_of[BMAX], slot_tok[BMAX], nb = 0;
+                for (int s = 0; s < S; s++) {
+                    if (sdone[s]) continue;
+                    if (S > 1) printf("%d:%d\n", s, stok[s]); else printf("%d\n", stok[s]);
+                    last = stok[s];
+                    smade[s]++;
+                    made++;
+                    if ((!ignore_eos && (stok[s] == 128001 || stok[s] == 128009)) || spos[s] >= ctx) {
+                        sdone[s] = 1;
+                        alive--;
+                        continue;
+                    }
+                    slot_of[nb] = s;
+                    R.slot_pos[nb] = spos[s];
+                    R.slot_seq[nb] = s;
+                    slot_tok[nb] = stok[s];
+                    nb++;
+                }
                 fflush(stdout);
-                made++;
-                if (!ignore_eos && (nxt == 128001 || nxt == 128009)) break;
-                if (R.pos >= ctx) break;
-                if (forward(nxt, R.pos, M.layers)) return 3;
-                R.pos++;
+                if (nb == 0) break;
+                if (forward_slots(slot_tok, nb, M.layers)) return 3;
+                for (int b = 0; b < nb; b++) {
+                    const int s = slot_of[b];
+                    spos[s]++;
+                    memcpy(R.fin, R.finb + (size_t)b * H, sizeof(float) * (size_t)H);
+                    int nxt = head_argmax();
+                    if (temp > 0) nxt = sample_token(temp, top_p, &seed);
+                    stok[s] = nxt;
+                }
             }
             double t_gen = now_ms() - t1;
             (void)last;
             printf("done %d %.1f\n", made, now_ms() - t0);
             printf("prompt %d tokens %.1f ms (%.2f tok/s), generated %d %.1f ms (%.2f tok/s)\n",
-                   npt, t_prompt, npt / (t_prompt / 1e3), made, t_gen, made > 0 ? made / (t_gen / 1e3) : 0.0);
+                   npt_all, t_prompt, npt_all / (t_prompt / 1e3),
+                   made, t_gen, made > 0 ? made / (t_gen / 1e3) : 0.0);
+            if (S > 1) {
+                printf("sequences %d, each", S);
+                for (int s = 0; s < S; s++) printf(" %d", smade[s]);
+                printf(" tokens; the prompt was run once a sequence\n");
+            }
             fflush(stdout);
             if (timing) print_timing();
         }

@@ -213,6 +213,32 @@ that generate 22 tokens. The battery on float32 still gives the recorded 2097 id
 It costs 1367 LUTs of 117120 (the glue 2467 -> 4241, no block RAM and no DSP) and the build closes
 wider than before: WNS +0.008 -> +0.049 ns, hold met, `hardware/reports/attn-timing.txt`.
 
+## Several sequences at once
+
+A generated token reads 417.5 MB of weights and another 65.7 MB for the head. At the 11.9 GB/s this
+board's DDR gives, that is about 40 of its 58 ms, and base-3 packing is already within 1.4% of what
+entropy coding the trits would save, so the bytes cannot come down. They can be shared. `--gen-batch N`
+puts N sequences in the engines' slots and the weight stream is read once for the group; each sequence
+keeps its own cache, its own attention, its own glue passes and its own head, so only the stream is
+shared. A slot is a (position, sequence) pair, which is all a forward ever assumed. The sequences'
+prompts go on the input line with a semicolon between them, or one prompt serves all of them, and the
+ids come back as `sequence:id`.
+
+| 250-token prompt, context 1024, three runs each | generation | power | energy a token |
+|---|---|---|---|
+| one sequence | 18.57 tok/s | 6.828 W | 0.3677 J |
+| **two sequences** | **23.75 tok/s** | 6.449 W | **0.2716 J** |
+
+Generation is 27.9% higher and a token costs 26.1% less, 2.72 -> 3.68 tokens a joule. The power falls
+with the batch because more of a token is the DMA streaming and less of it is the A53s.
+
+Context is the price: a sequence's cache is layers x context x 1312 bytes, 80.6 MB at 2048 positions,
+and udmabuf0 has about 107 MB free once the weights are in it. Two sequences therefore want 1024
+positions each; `--gen-batch` says so and refuses rather than overrunning the buffer.
+
+`--gen-batch 1` gives the shipped runtime's ids exactly, both sequences of a `--gen-batch 2` run give
+what each prompt gives on its own, and the float32 battery still gives the recorded 2097 ids.
+
 ## Correctness
 
 | | measured | how |
