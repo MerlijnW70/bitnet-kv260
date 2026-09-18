@@ -61,3 +61,21 @@ speed and power, 250-token prompt, context 1024, three runs each
 
 A sequence's cache is layers x ctx x 1312 bytes, 80.6 MB at 2048 positions, and udmabuf0 has about
 107 MB free after the weights: two sequences want 1024 positions each.
+
+== how far --gen-batch pays
+48 generated tokens a sequence, 250-token prompt, context 512, two runs each, cache fab, 2 ports
+  batch 1  17.55 / 16.79 tok/s   6.824 / 6.693 W   0.3937 J a token   2.54 tok/J
+  batch 2  22.74 / 22.65 tok/s   6.497 / 6.484 W   0.2860 J a token   3.50 tok/J
+  batch 3  21.95 / 21.90 tok/s   5.984 / 5.976 W   0.2727 J a token   3.67 tok/J
+  batch 4  23.99 / 23.95 tok/s   5.943 / 5.956 W   0.2482 J a token   4.03 tok/J
+
+Batch 3 is slower than batch 2: the engine answers SLICES = 2 activation vectors a clock, so a
+batch of b costs ceil(b / SLICES) clocks a weight beat.  Two ride one clock, three and four both
+cost two.  Past two the weight stream stops being shared and only the power falls.
+
+SLICES = 4 would put batch 4 back to one clock a beat, about 31 tok/s, and does not fit xck26:
+out of context an engine is 3805 LUTs with 10 BRAM + 10 URAM at two slices and 7204 LUTs with
+10 BRAM + 30 URAM at four, so forty blocks an engine and 160 over the four, against 90 BRAM +
+40 URAM already spent of 144 + 64.  Pairing two slices onto one memory's two ports does not help:
+a true-dual-port block RAM is limited to 36-bit ports where the simple dual port the store uses
+gives 72, so the 128-bit word costs twice the blocks a copy and the total is the same forty.

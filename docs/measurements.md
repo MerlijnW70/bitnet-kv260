@@ -239,6 +239,27 @@ positions each; `--gen-batch` says so and refuses rather than overrunning the bu
 `--gen-batch 1` gives the shipped runtime's ids exactly, both sequences of a `--gen-batch 2` run give
 what each prompt gives on its own, and the float32 battery still gives the recorded 2097 ids.
 
+How far it pays, 48 tokens a sequence at context 512, two runs each:
+
+| sequences | generation | power | energy a token | tokens a joule |
+|---|---|---|---|---|
+| 1 | 17.17 tok/s | 6.759 W | 0.3937 J | 2.54 |
+| **2** | **22.70 tok/s** | 6.491 W | 0.2860 J | 3.50 |
+| 3 | 21.93 tok/s | 5.980 W | 0.2727 J | 3.67 |
+| **4** | 23.97 tok/s | 5.950 W | **0.2482 J** | **4.03** |
+
+Three sequences are *slower* than two. That is the engine rather than noise: it answers `SLICES = 2`
+activation vectors a clock, so a batch of b costs `ceil(b / SLICES)` clocks a weight beat. Two ride
+one clock, three and four both cost two, so past two the weight stream stops being shared and only the
+power falls. Two is the speed sweet spot on this part and four the energy one; three is never worth it.
+
+`SLICES = 4` would put four sequences back to one clock a beat, around 31 tok/s, and does not fit
+xck26. Out of context an engine is 3805 LUTs with 10 BRAM + 10 URAM at two slices and 7204 LUTs with
+10 BRAM + 30 URAM at four: forty blocks an engine, 160 over the four, against 90 BRAM + 40 URAM
+already spent of the part's 144 + 64. Pairing two slices onto one memory's two ports does not rescue
+it either, because a true-dual-port block RAM is limited to 36-bit ports where the simple dual port
+the store uses gives 72, so the 128-bit word costs twice the blocks a copy and the total is unchanged.
+
 ## Correctness
 
 | | measured | how |
