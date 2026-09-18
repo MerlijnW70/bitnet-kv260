@@ -17,3 +17,27 @@ fab  3 prompt 1000 tokens 42150.4 ms (23.72 tok/s), generated 22 1459.5 ms (15.0
 == 1800-token prompt, one run each
 i8   prompt 12.01 tok/s, generated 6.50 tok/s, attention 50.717 ms a forward
 fab  prompt 21.72 tok/s, generated 13.03 tok/s, attention 13.549 ms a forward
+
+== the FFN glue widened from eight chains to sixteen (attn12)
+tb_ternary_glue on both widths: 58273 elements, 0 wrong, 0 protocol faults
+  pass A 6912 elements 27817 -> 13995 clocks, pass B 27709 -> 13885 (4.03 -> 2.02 an element)
+build: WNS +0.008 -> +0.049 ns, THS 0, LUTs 84315 -> 85682 of 117120, the glue 2467 -> 4241
+the 31-prompt battery on float32: 2097 generated ids, ALL IDENTICAL
+
+per forward (ms), 1000-token prompt, cache fab, 2 ports
+             8 chains  16 chains
+  glue A       3.434     1.778
+  glue B       3.411     1.754
+  engines     13.761    13.763
+  attention    9.573     9.588
+  total       42.562    39.276
+
+speed, 1000-token prompt, three runs each          idle     prompt   generate
+fab16 1 prompt 38878.0 ms (25.72 tok/s), gen 22 1378.8 ms (15.96 tok/s)  4.140 W  5.850 W  6.935 W
+fab16 2 prompt 38797.7 ms (25.77 tok/s), gen 22 1454.0 ms (15.13 tok/s)  4.143 W  5.864 W  6.802 W
+fab16 3 prompt 38824.4 ms (25.76 tok/s), gen 22 1453.4 ms (15.14 tok/s)  4.141 W  5.860 W  6.772 W
+  a prompt token 0.2409 -> 0.2275 J; a generated token 0.4455 -> 0.4438 J (22 tokens a run, noise)
+
+64 generated tokens, cache fab, 2 ports
+  1000-token prompt: prompt 24.82 tok/s, generated 14.95 tok/s, forward total 41.564 ms
+  1800-token prompt: prompt 22.95 tok/s, generated 13.87 tok/s, forward total 44.368 ms

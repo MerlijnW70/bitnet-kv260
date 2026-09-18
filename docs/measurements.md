@@ -162,16 +162,16 @@ best score, and values summed as `((w * vscale16) >> 16) * v8`. `results/kria-at
 |---|---|---|---|
 | float32 on the A53s | 9.57 tok/s | 5.21 tok/s | |
 | int8 on the A53s | 16.4 tok/s | 9.09 tok/s | 5.97 W, **0.657 J** |
-| **the fabric** | **23.7 tok/s** | **15.2 tok/s** | 6.78 W, **0.446 J** |
+| **the fabric** | **25.8 tok/s** | **15.4 tok/s** | 6.84 W, **0.444 J** |
 
 | an 1800-token prompt | prompt | generation | attention a forward |
 |---|---|---|---|
 | float32 on the A53s | 8.98 tok/s | 5.18 tok/s | 74.7 ms |
 | int8 on the A53s | 12.01 tok/s | 6.50 tok/s | 50.7 ms |
-| **the fabric** | **21.72 tok/s** | **13.03 tok/s** | **13.5 ms** |
+| **the fabric** | **22.95 tok/s** | **13.87 tok/s** | **13.8 ms** |
 
-Three runs of each at the 1000-token prompt with the page cache dropped: prompt energy 0.331 -> 0.241 J
-a token, generation 0.657 -> 0.446 J. The two engines cost 0.27 W at rest (idle 3.83 -> 4.10 W) and
+Three runs of each at the 1000-token prompt with the page cache dropped: prompt energy 0.331 -> 0.228 J
+a token, generation 0.657 -> 0.444 J. The two engines cost 0.27 W at rest (idle 3.83 -> 4.10 W) and
 more while they run; a token still ends up a third cheaper because it is over sooner.
 
 The fabric answers what `fx` answers, every token: over the 31 battery prompts the ids are identical,
@@ -184,6 +184,34 @@ multipliers shared across the groups, accumulators in distributed RAM), wrapped 
 switches the DMA between them on bit 15 of the port's GPIO. `hardware/tb_attn_fx_axi.v` checks it
 against `hardware/fxmodel.py` layer by layer, and CI runs that on every push. Two of the four ports
 carry one: three do not fit, 89.9% of the LUTs and 0.9 ns short of the clock.
+
+## The FFN glue at sixteen chains
+
+With attention off the ARM, the largest thing left in a forward that was not the weight stream was the
+glue: 6.85 ms a token, 114 us a call over thirty layers and two passes, out of 2467 LUTs. It was
+compute-bound and not stream-bound -- a 32-clock frame shared by eight chains at offset 4c takes an
+element every four clocks, while a pass moves only 110 KB. Sixteen chains at offset 2c take one every
+two, which is what the input pipeline and the 128-bit and 32-bit streams already sustained.
+
+`hardware/run-testbenches.sh glue` on both widths: 58273 elements, 0 wrong, 0 protocol faults, every
+line of output identical apart from the clock counts. 6912 elements take 27817 clocks at eight chains
+and 13995 at sixteen, 4.03 -> 2.02 clocks an element.
+
+| per forward (ms), a 1000-token prompt, `fab` | 8 chains | 16 chains |
+|---|---|---|
+| glue A | 3.434 | **1.778** |
+| glue B | 3.411 | **1.754** |
+| the weight engines | 13.761 | 13.763 |
+| attention | 9.573 | 9.588 |
+| **a forward** | **42.562** | **39.276** |
+
+Nothing but the glue moves. A 1000-token prompt goes 23.73 -> 25.75 tok/s over three runs and a prompt
+token 0.2409 -> 0.2275 J; an 1800-token prompt 21.72 -> 22.95 tok/s and its generation 13.03 -> 13.87.
+A generated token at the 1000-token prompt is 0.4455 -> 0.4438 J, which is inside the noise of runs
+that generate 22 tokens. The battery on float32 still gives the recorded 2097 ids, all identical.
+
+It costs 1367 LUTs of 117120 (the glue 2467 -> 4241, no block RAM and no DSP) and the build closes
+wider than before: WNS +0.008 -> +0.049 ns, hold met, `hardware/reports/attn-timing.txt`.
 
 ## Correctness
 

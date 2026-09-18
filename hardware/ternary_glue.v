@@ -15,8 +15,11 @@ module ternary_glue (
     input       [31:0] mval,
     output      [31:0] status
 );
-    localparam CHAINS = 8;
-    localparam DEPTH  = 128;
+    localparam CHAINS  = 16;
+    localparam SPACING = 32 / CHAINS;
+    localparam LOGS    = $clog2(SPACING);
+    localparam LOGC    = $clog2(CHAINS);
+    localparam DEPTH   = 128;
     localparam [1:0] S_IDLE = 2'd0, S_RUN = 2'd1, S_DONE = 2'd2;
 
     reg  [1:0]  state;
@@ -77,7 +80,7 @@ module ternary_glue (
     assign s_axis_tready = (state == S_RUN) && !validA && (acc_beats != n_beats);
     wire take_in   = s_axis_tvalid && s_axis_tready;
     wire a_move    = validA && !validB;
-    wire slot_any  = (fc[1:0] == 2'b11);
+    wire slot_any  = (&fc[LOGS-1:0]);
     wire credit_ok = (mode && idxC != 2'd0) || (free != 8'd0);
     wire c_take    = slot_any && validC && (taken != n_elems) && credit_ok;
     wire b_move    = validB && (!validC || c_take);
@@ -124,7 +127,7 @@ module ternary_glue (
     genvar c;
     generate
         for (c = 0; c < CHAINS; c = c + 1) begin : ch
-            glue_chain #(.OFFSET(4 * c)) chain (
+            glue_chain #(.OFFSET(SPACING * c)) chain (
                 .clk(clk), .clear(clearing), .fc(fc), .mode(mode), .s1(s1), .s2(s_T), .s3(s_V),
                 .load(slot_now[c] && c_take), .load_last(last_in), .load_neg(negC),
                 .load_x(xC), .load_y(yC), .load_b(bC), .load_g(gC),
@@ -134,8 +137,9 @@ module ternary_glue (
         end
     endgenerate
 
-    wire       hit  = (fc[1:0] == (mode ? 2'd2 : 2'd0));
-    wire [2:0] sel  = mode ? (fc[4:2] + 3'd3) : (fc[4:2] - 3'd1);
+    wire [4:0]      doff = fc - (mode ? 5'd22 : 5'd4);
+    wire            hit  = (doff[LOGS-1:0] == {LOGS{1'b0}});
+    wire [LOGC-1:0] sel  = doff[4:LOGS];
     reg [17:0] resR;
     reg        rvalR, rlastR, rnegR;
     always @(posedge clk) begin
