@@ -79,3 +79,17 @@ out of context an engine is 3805 LUTs with 10 BRAM + 10 URAM at two slices and 7
 40 URAM already spent of 144 + 64.  Pairing two slices onto one memory's two ports does not help:
 a true-dual-port block RAM is limited to 36-bit ports where the simple dual port the store uses
 gives 72, so the 128-bit word costs twice the blocks a copy and the total is the same forty.
+
+== through the endpoint (runtime/bitnet_serve.py), 64 tokens a request
+  one request   15.41 tok/s end to end, its generation phase 18.22 tok/s
+  two at once   19.41 tok/s end to end, its generation phase 23.84 tok/s
+The generation figure matches the runtime on its own, so the grouping loses nothing; end to end is
+lower because each request also pays for its prompt.
+
+The protocol gained two things the endpoint needs: a line holds one prompt a sequence with semicolons
+between, so a run is as wide as the prompts given rather than always --gen-batch wide (a lone caller
+is no longer slowed by a copy of itself in the other slot), and a line may open with !N to cap that
+run's generated tokens. Without the cap a request asking for 64 tokens still ran to EOS, 206 tokens,
+and two concurrent requests measured SLOWER than one (8.97 against 15.40 tok/s aggregate).
+The batch table above is taken with --gen-batch-fill, which restores the older reading where a
+single prompt fills every slot.

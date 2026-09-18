@@ -1174,6 +1174,7 @@ struct timings {
 #define ATT_SEL (1u << 15)
 static unsigned ATT_PORTS;
 static size_t FAB_BASE_OFF;
+static int GEN_FILL;
 
 struct run {
     int ctx;
@@ -3018,7 +3019,7 @@ static int usage(void)
                     "                          [--stride HEX] [--glue-gpio HEX] [--glue-params HEX]\n"
                     "                          [--glue-dma HEX] [--buf0 DEV] [--buf1 DEV] [--buf2 DEV]\n"
                     "                          [--head arm|fabric] [--head-k N] [--head-chunks N] [--gu-chunks N]\n"
-                    "                          [--prompt-batch 1..4] [--gen-batch 1..4]\n");
+                    "                          [--prompt-batch 1..4] [--gen-batch 1..4] [--gen-batch-fill]\n");
     return 2;
 }
 
@@ -3043,6 +3044,7 @@ int main(int argc, char **argv)
         else if (!strcmp(k, "--ignore-eos")) ignore_eos = 1;
         else if (!strcmp(k, "--verify-weights")) verify_weights = 1;
         else if (!strcmp(k, "--no-mlock")) lock_head = 0;
+        else if (!strcmp(k, "--gen-batch-fill")) GEN_FILL = 1;
         else if (!v) return usage();
         else if (!strcmp(k, "--dir")) dir = v, a++;
         else if (!strcmp(k, "--buf0")) buf0 = v, a++;
@@ -3503,6 +3505,17 @@ int main(int argc, char **argv)
         size_t cap = 0;
         while (getline(&line, &cap, stdin) > 0) {
             int ids[8192], n = 0, cut[BMAX], ncut = 0;
+            int run_new = max_new;
+            {
+                char *p = line;
+                while (*p == ' ' || *p == '\t') p++;
+                if (*p == '!' && p[1] >= '0' && p[1] <= '9') {
+                    long v = strtol(p + 1, &p, 10);
+                    if (v > 0 && v < run_new) run_new = (int)v;
+                    while (*p == ' ' || *p == '\t') p++;
+                    memmove(line, p, strlen(p) + 1);
+                }
+            }
             for (char *p = line; *p && n < 8192;) {
                 if (*p == ';') { if (ncut < (int)BMAX) cut[ncut++] = n; p++; continue; }
                 if (*p >= '0' && *p <= '9') { ids[n++] = (int)strtol(p, &p, 10); continue; }
@@ -3523,7 +3536,9 @@ int main(int argc, char **argv)
             pf_cpustat(PF_C0);
 #endif
             double t0 = now_ms();
-            const int S = R.nseq < 1 ? 1 : R.nseq;
+            const int most = R.nseq < 1 ? 1 : R.nseq;
+            int S = (ncut == 0) ? (GEN_FILL ? most : 1) : (ncut + 1);
+            if (S > most) S = most;
             const int H = M.hidden;
             int spos[BMAX], stok[BMAX], sdone[BMAX], smade[BMAX];
             int poff[BMAX], plen[BMAX];
@@ -3538,8 +3553,8 @@ int main(int argc, char **argv)
                     plen[s] = (s <= ncut && end > start) ? end - start : 0;
                 }
                 if (plen[s] == 0) {
-                    fprintf(stderr, "bitnet_kria: --gen-batch %d wants %d prompts on the line, "
-                                    "semicolon between them, or one for all of them\n", S, S);
+                    fprintf(stderr, "bitnet_kria: prompt %d of the %d on this line is empty; they are "
+                                    "separated by a semicolon and there may be up to %d\n", s, S, most);
                     return 2;
                 }
             }
@@ -3568,7 +3583,7 @@ int main(int argc, char **argv)
             double t_prompt = now_ms() - t0;
             double t1 = now_ms();
             int made = 0, alive = S;
-            for (int i = 0; i < max_new && alive > 0; i++) {
+            for (int i = 0; i < run_new && alive > 0; i++) {
                 int slot_of[BMAX], slot_tok[BMAX], nb = 0;
                 for (int s = 0; s < S; s++) {
                     if (sdone[s]) continue;

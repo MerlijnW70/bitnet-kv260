@@ -239,6 +239,12 @@ positions each; `--gen-batch` says so and refuses rather than overrunning the bu
 `--gen-batch 1` gives the shipped runtime's ids exactly, both sequences of a `--gen-batch 2` run give
 what each prompt gives on its own, and the float32 battery still gives the recorded 2097 ids.
 
+One line of ids is one prompt and a semicolon starts the next, so a run holds exactly as many
+sequences as there are prompts: a lone caller is never slowed by a copy of itself riding the other
+slot. `--gen-batch` is the most a run may hold. A line may open with `!N`, the tokens that run may
+generate, which only ever lowers `--max-new`. The table below is taken with `--gen-batch-fill`,
+which restores the older reading where a single prompt fills every slot.
+
 How far it pays, 48 tokens a sequence at context 512, two runs each:
 
 | sequences | generation | power | energy a token | tokens a joule |
@@ -259,6 +265,31 @@ xck26. Out of context an engine is 3805 LUTs with 10 BRAM + 10 URAM at two slice
 already spent of the part's 144 + 64. Pairing two slices onto one memory's two ports does not rescue
 it either, because a true-dual-port block RAM is limited to 36-bit ports where the simple dual port
 the store uses gives 72, so the 128-bit word costs twice the blocks a copy and the total is unchanged.
+
+## An endpoint on the board
+
+`runtime/bitnet_serve.py` puts an OpenAI-compatible endpoint in front of the runtime, so anything that
+speaks that API can point at the board. It holds one bitnet_kria open and groups requests that arrive
+close together into one `--gen-batch` run, which is where the throughput comes from: the whole model's
+weight stream is read once for the group instead of once a request.
+
+    python3 bitnet_serve.py --gen-batch 2 --context 1024
+
+    curl http://kria:8080/v1/chat/completions -H 'content-type: application/json' \
+      -d '{"messages":[{"role":"user","content":"144 / 12 + 7?"}]}'
+
+Measured through the endpoint, 64 tokens a request, the same prompt:
+
+| | end to end | its generation phase |
+|---|---|---|
+| one request | 15.41 tok/s | 18.22 tok/s |
+| two at once | **19.41 tok/s** | **23.84 tok/s** |
+
+The generation figure matches what the runtime gives on its own, so nothing is lost in the grouping;
+the end-to-end number is lower than it because each request also pays for its prompt.
+
+Routes: `POST /v1/chat/completions` and `/v1/completions`, both with `stream`, `GET /v1/models` and
+`GET /healthz`. The board samples greedily, so temperature and top_p are accepted and ignored.
 
 ## Correctness
 
