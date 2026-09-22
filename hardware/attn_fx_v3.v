@@ -4,6 +4,7 @@
 module attn_fx_v3 #(
     parameter GROUPS = 5,
     parameter SLOTS  = 4,
+    parameter ROWS   = 8,
     parameter EXPF_HEX = "attn_expf.hex",
     parameter EXPI_HEX = "attn_expi.hex"
 ) (
@@ -37,7 +38,9 @@ module attn_fx_v3 #(
     localparam FRAC  = 12;
     localparam CUT   = 20;
     localparam HEADS = GROUPS * SLOTS;
-    localparam BEATS = 2 + 16 * GROUPS;
+    localparam CELLS = ROWS * GROUPS;
+    localparam SCB   = (GROUPS + 7) / 8;
+    localparam BEATS = 2 * SCB + 2 * CELLS;
 
     reg [15:0]        qf   [0:HEADS-1];
     reg signed [23:0] top  [0:HEADS-1];
@@ -47,14 +50,18 @@ module attn_fx_v3 #(
     reg [15:0]        v16  [0:GROUPS-1];
 
     reg        mode_b;
-    reg [5:0]  clearing;
-    reg [6:0]  beat;
+    reg [9:0]  clearing;
+    reg [9:0]  beat;
     assign in_ready = clearing == 0;
     wire take = in_valid && in_ready;
 
     reg         a_k, a_v, a_first, a_last;
-    reg [2:0]   a_g;
+    reg [4:0]   a_g;
     reg [2:0]   a_r;
+    reg [9:0]   a_cell;
+    reg [9:0]   bcell;
+    reg [4:0]   bg;
+    reg [2:0]   br;
     reg [127:0] a_data;
     integer gi;
     always @(posedge clk) begin
@@ -62,26 +69,34 @@ module attn_fx_v3 #(
         a_v <= 0;
         if (!rstn || start) begin
             beat <= 0;
-            clearing <= start ? 8 * GROUPS : 6'd0;
+            bcell <= 0;
+            bg <= 0;
+            br <= 0;
+            clearing <= start ? CELLS[9:0] : 10'd0;
             mode_b <= pass_b;
         end else begin
             if (clearing != 0) clearing <= clearing - 1;
             if (take) begin
-                beat <= (beat == BEATS - 1) ? 7'd0 : beat + 1;
-                if (beat == 0)
-                    for (gi = 0; gi < GROUPS; gi = gi + 1) k16[gi] <= in_data[16*gi +: 16];
-                else if (beat == 1)
-                    for (gi = 0; gi < GROUPS; gi = gi + 1) v16[gi] <= in_data[16*gi +: 16];
-                else if (beat < 2 + 8 * GROUPS) begin
-                    a_k <= 1;
-                    a_g <= (beat - 2) / 8;
-                    a_r <= (beat - 2) % 8;
-                    a_first <= (beat - 2) % 8 == 0;
-                    a_last <= (beat - 2) % 8 == 7;
+                beat <= (beat == BEATS - 1) ? 10'd0 : beat + 1;
+                if (beat < SCB) begin
+                    for (gi = 0; gi < 8; gi = gi + 1)
+                        if (beat * 8 + gi < GROUPS) k16[beat * 8 + gi] <= in_data[16*gi +: 16];
+                end else if (beat < 2 * SCB) begin
+                    for (gi = 0; gi < 8; gi = gi + 1)
+                        if ((beat - SCB) * 8 + gi < GROUPS) v16[(beat - SCB) * 8 + gi] <= in_data[16*gi +: 16];
                 end else begin
-                    a_v <= mode_b;
-                    a_g <= (beat - 2 - 8 * GROUPS) / 8;
-                    a_r <= (beat - 2 - 8 * GROUPS) % 8;
+                    a_k <= beat < 2 * SCB + CELLS;
+                    a_v <= mode_b && !(beat < 2 * SCB + CELLS);
+                    a_g <= bg;
+                    a_r <= br;
+                    a_cell <= bcell;
+                    a_first <= br == 0;
+                    a_last <= br == ROWS - 1;
+                    bcell <= (bcell == CELLS - 1) ? 10'd0 : bcell + 10'd1;
+                    if (br == ROWS - 1) begin
+                        br <= 3'd0;
+                        bg <= (bg == GROUPS - 1) ? 5'd0 : bg + 5'd1;
+                    end else br <= br + 3'd1;
                 end
                 a_data <= in_data;
             end
@@ -89,9 +104,9 @@ module attn_fx_v3 #(
     end
 
     reg [4:0] kv, kfirst, klast;
-    reg [2:0] kg [0:5];
+    reg [4:0] kg [0:5];
     reg [8:0] sv;
-    reg [2:0] sg [0:8];
+    reg [4:0] sg [0:8];
     integer ti;
     always @(posedge clk) begin
         kv     <= {kv[3:0], a_k};
@@ -112,7 +127,7 @@ module attn_fx_v3 #(
     reg [19:0] expi [0:CUT];
     initial $readmemh(EXPI_HEX, expi);
 
-    wire [39:0] rdm [0:HEADS*16-1];
+    wire [39:0] rdm [0:SLOTS*16-1];
     wire signed [23:0] slot_s  [0:SLOTS-1];
     wire [19:0]        slot_w  [0:SLOTS-1];
     wire [35:0]        slot_uw [0:SLOTS-1];
@@ -122,13 +137,13 @@ module attn_fx_v3 #(
             (* rom_style = "block" *) reg [19:0] expf [0:(1<<FRAC)-1];
             initial $readmemh(EXPF_HEX, expf);
 
-            (* ram_style = "distributed" *) reg [127:0] qrow [0:8*GROUPS-1];
+            (* ram_style = "distributed" *) reg [127:0] qrow [0:CELLS-1];
             always @(posedge clk)
                 if (qrow_we && qrow_head % SLOTS == gs)
-                    qrow[(qrow_head / SLOTS) * 8 + qrow_idx] <= qrow_val;
+                    qrow[(qrow_head / SLOTS) * ROWS + qrow_idx] <= qrow_val;
                 else if (q_we && q_head % SLOTS == gs)
-                    qrow[(q_head / SLOTS) * 8 + q_idx[6:4]][8*q_idx[3:0] +: 8] <= q_val;
-            wire [127:0] qsel = qrow[a_g * 8 + a_r];
+                    qrow[(q_head / SLOTS) * ROWS + q_idx[6:4]][8*q_idx[3:0] +: 8] <= q_val;
+            wire [127:0] qsel = qrow[a_cell];
 
             (* use_dsp = "yes" *) reg signed [15:0] p1 [0:15];
             reg signed [16:0] p2 [0:7];
@@ -184,22 +199,22 @@ module attn_fx_v3 #(
             assign slot_uw[gs] = uw;
 
             for (gj = 0; gj < 16; gj = gj + 1) begin : lane
-                (* ram_style = "distributed" *) reg signed [39:0] mem [0:8*GROUPS-1];
+                (* ram_style = "distributed" *) reg signed [39:0] mem [0:CELLS-1];
                 (* use_dsp = "yes" *) reg signed [28:0] pv;
                 reg signed [28:0] pv2;
-                reg [5:0] addr, addr2;
+                reg [9:0] addr, addr2;
                 reg       wr, wr2;
                 always @(posedge clk) begin
                     pv <= $signed({1'b0, u[a_g * SLOTS + gs]}) * $signed(a_data[8*gj +: 8]);
-                    addr <= a_g * 8 + a_r;
+                    addr <= a_cell;
                     wr <= clearing == 0 && a_v;
                     pv2 <= pv;
                     addr2 <= addr;
                     wr2 <= wr;
-                    if (clearing != 0) mem[clearing - 6'd1] <= 40'sd0;
+                    if (clearing != 0) mem[clearing - 10'd1] <= 40'sd0;
                     else if (wr2) mem[addr2] <= mem[addr2] + pv2;
                 end
-                assign rdm[gs * 16 + gj] = mem[(rd_head / SLOTS) * 8 + rd_idx[6:4]];
+                assign rdm[gs * 16 + gj] = mem[(rd_head / SLOTS) * ROWS + rd_idx[6:4]];
             end
         end
     endgenerate

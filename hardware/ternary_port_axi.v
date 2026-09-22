@@ -2,6 +2,9 @@
 module ternary_port_axi #(
     parameter SLICES = 2,
     parameter ULTRA  = 1,
+    parameter GROUPS = 5,
+    parameter SLOTS  = 4,
+    parameter ROWS   = 8,
     parameter EXPF_HEX = "attn_expf.hex",
     parameter EXPI_HEX = "attn_expi.hex"
 ) (
@@ -53,7 +56,8 @@ module ternary_port_axi #(
         .ctrl({gpo[31:16], 1'b0, gpo[14:0]}), .status(mv_status)
     );
 
-    attn_fx_axi #(.EXPF_HEX(EXPF_HEX), .EXPI_HEX(EXPI_HEX)) attention (
+    attn_fx_axi #(.GROUPS(GROUPS), .SLOTS(SLOTS), .ROWS(ROWS),
+                  .EXPF_HEX(EXPF_HEX), .EXPI_HEX(EXPI_HEX)) attention (
         .clk(aclk), .rstn(aresetn),
         .s_axis_tdata(s_axis_tdata), .s_axis_tvalid(s_axis_tvalid && sel), .s_axis_tready(at_s_ready),
         .m_axis_tdata(at_m_data), .m_axis_tvalid(at_m_valid), .m_axis_tready(m_axis_tready && sel),

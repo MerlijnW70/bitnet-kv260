@@ -2,6 +2,9 @@
 `default_nettype none
 
 module attn_fx_axi #(
+    parameter GROUPS = 5,
+    parameter SLOTS  = 4,
+    parameter ROWS   = 8,
     parameter EXPF_HEX = "attn_expf.hex",
     parameter EXPI_HEX = "attn_expi.hex"
 ) (
@@ -16,20 +19,29 @@ module attn_fx_axi #(
     output reg          m_axis_tlast,
     output wire [31:0]  status
 );
-    localparam HEADS = 20;
+    localparam HEADS = GROUPS * SLOTS;
+    localparam DIM   = 16 * ROWS;
+    localparam QFB   = (HEADS * 16 + 127) / 128;
+    localparam TOPB  = (HEADS * 24 + 127) / 128;
+    localparam QROWS = HEADS * ROWS;
+    localparam HDRB  = QFB + TOPB + QROWS;
+    localparam SCB   = (GROUPS + 7) / 8;
+    localparam BEATS = 2 * SCB + 2 * ROWS * GROUPS;
+    localparam OUTA  = HEADS;
+    localparam OUTB  = HEADS + 2 * HEADS * DIM;
     localparam [2:0] S_IDLE = 0, S_HDR = 1, S_CFG = 2, S_DATA = 3, S_DRAIN = 4, S_OUT = 5;
     localparam [15:0] MAGIC = 16'hA77E;
 
     reg [2:0]   state;
     reg         pass_b;
     reg [15:0]  positions;
-    reg [7:0]   hbeat;
-    reg [383:0] qf_bits;
-    reg [511:0] top_bits;
-    reg [4:0]   cfg;
+    reg [15:0]  hbeat;
+    reg [QFB*128-1:0]  qf_bits;
+    reg [TOPB*128-1:0] top_bits;
+    reg [5:0]   cfg;
     reg [22:0]  data_left;
     reg [5:0]   drain;
-    reg [12:0]  ototal;
+    reg [15:0]  ototal;
 
     reg          core_start;
     reg          qf_we, top_we, qrow_we;
@@ -38,6 +50,8 @@ module attn_fx_axi #(
     reg  [23:0]  top_val;
     reg  [2:0]   qrow_idx;
     reg  [127:0] qrow_val;
+    reg  [4:0]   qh;
+    reg  [2:0]   qi;
     wire         core_ready;
     reg  [4:0]   rd_head;
     reg  [6:0]   rd_idx;
@@ -49,10 +63,11 @@ module attn_fx_axi #(
     assign s_axis_tready = (state == S_IDLE) || (state == S_HDR)
                         || (state == S_DATA && !core_start && core_ready && data_left != 0);
     wire take = s_axis_tvalid && s_axis_tready;
-    reg [13:0] sent;
-    assign status = {state, pass_b, sent, 1'b0, fidx};
+    reg [15:0] sent;
+    assign status = {state, pass_b, sent[13:0], 1'b0, fidx[12:0]};
 
-    attn_fx_v3 #(.EXPF_HEX(EXPF_HEX), .EXPI_HEX(EXPI_HEX)) core (
+    attn_fx_v3 #(.GROUPS(GROUPS), .SLOTS(SLOTS), .ROWS(ROWS),
+                 .EXPF_HEX(EXPF_HEX), .EXPI_HEX(EXPI_HEX)) core (
         .clk(clk), .rstn(rstn), .start(core_start), .pass_b(pass_b),
         .q_we(1'b0), .q_head(5'd0), .q_idx(7'd0), .q_val(8'd0),
         .qrow_we(qrow_we), .qrow_head(qrow_head), .qrow_idx(qrow_idx), .qrow_val(qrow_val),
@@ -61,11 +76,13 @@ module attn_fx_axi #(
         .in_data(s_axis_tdata), .in_valid(in_valid), .in_ready(core_ready),
         .rd_head(rd_head), .rd_idx(rd_idx), .rd_acc(rd_acc), .rd_top(rd_top), .rd_sum(rd_sum));
 
-    reg [12:0] fidx;
+    reg [15:0] fidx;
     reg        a_valid, a_last, a_sum, a_high;
     reg        b_valid, b_last;
     reg [31:0] b_data;
-    wire [12:0] fentry = fidx - 13'd20;
+    reg  [4:0]  oh;
+    reg  [6:0]  od;
+    reg         ohigh;
     wire [31:0] word = !pass_b ? {{8{rd_top[23]}}, rd_top}
                      : a_sum ? rd_sum
                      : a_high ? {{24{rd_acc[39]}}, rd_acc[39:32]} : rd_acc[31:0];
@@ -86,18 +103,22 @@ module attn_fx_axi #(
                 pass_b <= s_axis_tdata[16];
                 positions <= s_axis_tdata[47:32];
                 hbeat <= 1;
+                qh <= 0;
+                qi <= 0;
                 state <= S_HDR;
             end
             S_HDR: if (take) begin
-                if (hbeat <= 3) qf_bits[128 * (hbeat - 1) +: 128] <= s_axis_tdata;
-                else if (hbeat <= 7) top_bits[128 * (hbeat - 4) +: 128] <= s_axis_tdata;
+                if (hbeat <= QFB) qf_bits[128 * (hbeat - 1) +: 128] <= s_axis_tdata;
+                else if (hbeat <= QFB + TOPB) top_bits[128 * (hbeat - QFB - 1) +: 128] <= s_axis_tdata;
                 else begin
                     qrow_we <= 1;
-                    qrow_head <= (hbeat - 8) / 8;
-                    qrow_idx <= (hbeat - 8) % 8;
+                    qrow_head <= qh;
+                    qrow_idx <= qi;
                     qrow_val <= s_axis_tdata;
+                    if (qi == ROWS - 1) begin qi <= 3'd0; qh <= qh + 5'd1; end
+                    else qi <= qi + 3'd1;
                 end
-                if (hbeat == 167) begin
+                if (hbeat == HDRB) begin
                     cfg <= 0;
                     state <= S_CFG;
                 end
@@ -112,7 +133,7 @@ module attn_fx_axi #(
                 top_val <= top_bits[24 * cfg +: 24];
                 if (cfg == HEADS - 1) begin
                     core_start <= 1;
-                    data_left <= positions * 23'd82;
+                    data_left <= positions * BEATS[22:0];
                     state <= S_DATA;
                 end
                 cfg <= cfg + 1;
@@ -127,7 +148,7 @@ module attn_fx_axi #(
             S_DRAIN: begin
                 drain <= drain - 1;
                 if (drain == 0) begin
-                    ototal <= pass_b ? 13'd5140 : 13'd20;
+                    ototal <= pass_b ? OUTB[15:0] : OUTA[15:0];
                     state <= S_OUT;
                 end
             end
@@ -140,6 +161,9 @@ module attn_fx_axi #(
         if (m_axis_tvalid && m_axis_tready) sent <= sent + 1;
         if (!rstn || state != S_OUT) begin
             fidx <= 0;
+            oh <= 0;
+            od <= 0;
+            ohigh <= 0;
             a_valid <= 0;
             b_valid <= 0;
             if (state == S_DRAIN) sent <= 0;
@@ -159,13 +183,20 @@ module attn_fx_axi #(
             b_valid <= a_valid;
             b_last <= a_last;
             if (fidx < ototal) begin
-                rd_head <= (fidx < 20) ? fidx[4:0] : (fentry >> 1) / 128;
-                rd_idx  <= (fidx < 20) ? 7'd0 : (fentry >> 1) % 128;
-                a_sum <= fidx < 20;
-                a_high <= fentry[0];
+                rd_head <= (fidx < OUTA) ? fidx[4:0] : oh;
+                rd_idx  <= (fidx < OUTA) ? 7'd0 : od;
+                a_sum <= fidx < OUTA;
+                a_high <= (fidx >= OUTA) && ohigh;
                 a_valid <= 1;
                 a_last <= fidx == ototal - 1;
                 fidx <= fidx + 1;
+                if (fidx >= OUTA) begin
+                    if (ohigh) begin
+                        ohigh <= 1'b0;
+                        if (od == DIM - 1) begin od <= 7'd0; oh <= oh + 5'd1; end
+                        else od <= od + 7'd1;
+                    end else ohigh <= 1'b1;
+                end
             end else begin
                 a_valid <= 0;
             end

@@ -9,6 +9,9 @@ set sburst 256
 set swidth 128
 set ports hp
 set A 2
+set agroups 5
+set aslots 4
+set arows 8
 set hw [file dirname [file normalize [info script]]]
 if {[llength $argv] % 2} { error "arguments come in name value pairs: $argv" }
 foreach {k v} $argv {
@@ -79,7 +82,7 @@ for {set i 0} {$i < $E} {incr i} {
 
     if {$i < $A} {
         set eng [create_bd_cell -type module -reference ternary_port_axi eng$i]
-        set_property -dict [list CONFIG.EXPF_HEX [file join $here attn_expf.hex] CONFIG.EXPI_HEX [file join $here attn_expi.hex]] $eng
+        set_property -dict [list CONFIG.EXPF_HEX [file join $here attn_expf.hex] CONFIG.EXPI_HEX [file join $here attn_expi.hex]             CONFIG.GROUPS $agroups CONFIG.SLOTS $aslots CONFIG.ROWS $arows] $eng
     } else {
         set eng [create_bd_cell -type module -reference ternary_matvec_axi eng$i]
     }
