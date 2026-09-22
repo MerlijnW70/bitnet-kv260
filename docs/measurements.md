@@ -5,7 +5,25 @@ out of and the command that produced it. All of it is one KV260 — see [../ENVI
 
 Reproduce any of it with `../selftest.sh`, or with the command in the right-hand column.
 
-## Speed
+## Context 1024, 0.73B (bitnet_b1_58-large), 900 generated tokens
+
+Shipped bitstream: 4 attention units, 200 MHz. `--context 1024 --attn-ports 4`.
+
+| attention | tok/s | W | tok/J | top-1 vs numpy |
+|---|---|---|---|---|
+| `--cache-dtype i8` | 30.48 | 5.899 | 5.17 | 209/210 |
+| `ATTN_SHAPE=16x96 --cache-dtype fab` | **34.98** | 6.424 | **5.44** | **210/210** |
+
+Four sequences at once, 200 tokens each, `--gen-batch 4 --cache-dtype fab`:
+**55.54 tok/s aggregate, 5.429 W, 9.75 tok/J**.
+
+Context 512, 256 tokens: `i8` 44.21 tok/s against `fab` 41.46. Short context: use `i8`.
+
+2B4T on this bitstream: byte-identical to the 250 MHz one, 2212 ids over the arm head, the
+fabric head, `--prompt-batch 4` and `--cache-dtype i8`; 16.49 against 16.37 tok/s.
+
+
+## Speed
 
 Five bench prompts, three repeats each, 267 prompt and 876 generated tokens, context 512, one
 long-lived process; `results/kria-speed2-results.txt`.

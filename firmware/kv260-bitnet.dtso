@@ -18,7 +18,7 @@
 				compatible = "xlnx,fclk";
 				clocks = <&zynqmp_clk 71>;
 				assigned-clocks = <&zynqmp_clk 71>;
-				assigned-clock-rates = <250000000>;
+				assigned-clock-rates = <200000000>;
 				clock-output-names = "fabric_clk";
 			};
 		};
