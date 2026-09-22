@@ -1170,12 +1170,40 @@ struct timings {
 #define CACHE_FAB 4
 #define CACHE_K8 5
 #define CACHE_V8 6
-#define FAB_BLOCK 1312u
-#define FAB_HEADER 2688u
-#define FAB_KV 5
-#define FAB_NQ 20
-#define FAB_FD 128
-#define FAB_QPK 4
+#define FAB_KVMAX 16
+#define FAB_NQMAX 20
+#define FAB_FDMAX 128
+
+struct fabshape {
+    int kv, nq, fd, qpk, rows, scb, cells, qfb, topb;
+    unsigned block, header, off_top, off_qq;
+    int outa, outb;
+};
+
+static struct fabshape FAB;
+
+static void fab_shape(int kv, int nq, int fd, int qpk)
+{
+    FAB.kv = kv; FAB.nq = nq; FAB.fd = fd; FAB.qpk = qpk;
+    FAB.rows = fd / 16;
+    FAB.scb = (kv + 7) / 8;
+    FAB.cells = FAB.rows * kv;
+    FAB.qfb = (nq * 16 + 127) / 128;
+    FAB.topb = (nq * 24 + 127) / 128;
+    FAB.block = (unsigned)(2 * FAB.scb + 2 * FAB.cells) * 16u;
+    FAB.header = (unsigned)(1 + FAB.qfb + FAB.topb + nq * FAB.rows) * 16u;
+    FAB.off_top = (unsigned)(1 + FAB.qfb) * 16u;
+    FAB.off_qq = (unsigned)(1 + FAB.qfb + FAB.topb) * 16u;
+    FAB.outa = nq;
+    FAB.outb = nq + 2 * nq * fd;
+}
+
+#define FAB_KV FAB.kv
+#define FAB_NQ FAB.nq
+#define FAB_FD FAB.fd
+#define FAB_QPK FAB.qpk
+#define FAB_BLOCK FAB.block
+#define FAB_HEADER FAB.header
 #define OFF_ATT_HDR 0x200000u
 #define OFF_ATT_RES 0x280000u
 #define ATT_STRIDE 0x8000u
@@ -1606,8 +1634,8 @@ static int attn_fabric(void)
     const int hd = M.head_dim, T = R.cur_T, l = R.cur_layer, nq = M.n_q;
     const unsigned P = ATT_PORTS < (unsigned)T ? ATT_PORTS : (unsigned)T;
     const float scaling = 1.0f / sqrtf((float)hd);
-    uint8_t hdr[FAB_HEADER];
-    int8_t qq[20 * 128];
+    uint8_t hdr[(1 + 3 + 4 + FAB_NQMAX * (FAB_FDMAX / 16)) * 16];
+    int8_t qq[FAB_NQMAX * FAB_FDMAX];
     uint32_t qf[20];
     int32_t top[20];
     uint64_t sum[20];
@@ -1621,18 +1649,18 @@ static int attn_fabric(void)
     }
     memset(acc, 0, sizeof acc);
     for (unsigned pass = 0; pass < 2; pass++) {
-        const size_t words = pass ? 5140u : 20u;
+        const size_t words = pass ? (size_t)FAB.outb : (size_t)FAB.outa;
         memset(hdr, 0, sizeof hdr);
         hdr[0] = 0x7E; hdr[1] = 0xA7; hdr[2] = (uint8_t)pass;
         for (int h = 0; h < nq; h++) {
             hdr[16 + 2 * h] = (uint8_t)qf[h];
             hdr[17 + 2 * h] = (uint8_t)(qf[h] >> 8);
             uint32_t t24 = (uint32_t)top[h] & 0xFFFFFFu;
-            hdr[64 + 3 * h] = (uint8_t)t24;
-            hdr[65 + 3 * h] = (uint8_t)(t24 >> 8);
-            hdr[66 + 3 * h] = (uint8_t)(t24 >> 16);
+            hdr[FAB.off_top + 3 * h] = (uint8_t)t24;
+            hdr[FAB.off_top + 1 + 3 * h] = (uint8_t)(t24 >> 8);
+            hdr[FAB.off_top + 2 + 3 * h] = (uint8_t)(t24 >> 16);
         }
-        memcpy(hdr + 128, qq, (size_t)nq * (size_t)hd);
+        memcpy(hdr + FAB.off_qq, qq, (size_t)nq * (size_t)hd);
         for (k = 0; k < P; k++) {
             const unsigned n = (k + 1) * (unsigned)T / P - k * (unsigned)T / P;
             hdr[4] = (uint8_t)n;
@@ -1665,7 +1693,7 @@ static int attn_fabric(void)
                 } else {
                     sum[h] += ATT_WORDS[k][h];
                     for (int d = 0; d < hd; d++) {
-                        const size_t e = 20u + 2u * ((size_t)h * (size_t)hd + (size_t)d);
+                        const size_t e = (size_t)FAB.outa + 2u * ((size_t)h * (size_t)FAB_FD + (size_t)d);
                         acc[h * hd + d] += (int64_t)(((uint64_t)(int64_t)(int32_t)ATT_WORDS[k][e + 1] << 32)
                                                      | ATT_WORDS[k][e]);
                     }
@@ -1682,11 +1710,11 @@ static int attn_fabric(void)
 
 static void attn_worker(void *arg, int id, int nt);
 
-static uint32_t ATT_QF[4][FAB_NQ];
-static int32_t ATT_TOP[4][FAB_NQ];
-static uint64_t ATT_SUM[4][FAB_NQ];
-static int64_t ATT_ACC[4][FAB_NQ * FAB_FD];
-static int8_t ATT_QQ[4][FAB_NQ * FAB_FD];
+static uint32_t ATT_QF[4][FAB_NQMAX];
+static int32_t ATT_TOP[4][FAB_NQMAX];
+static uint64_t ATT_SUM[4][FAB_NQMAX];
+static int64_t ATT_ACC[4][FAB_NQMAX * FAB_FDMAX];
+static int8_t ATT_QQ[4][FAB_NQMAX * FAB_FDMAX];
 
 static int attn_fabric_groups(void)
 {
@@ -1694,7 +1722,7 @@ static int attn_fabric_groups(void)
     const int G = R.fab_groups, gq = M.groups;
     const float scaling = 1.0f / sqrtf((float)hd);
     const unsigned P = ATT_PORTS < (unsigned)G ? ATT_PORTS : (unsigned)G;
-    uint8_t hdr[FAB_HEADER];
+    uint8_t hdr[(1 + 3 + 4 + FAB_NQMAX * (FAB_FDMAX / 16)) * 16];
     unsigned i;
 
     for (int c0 = 0; c0 < G; c0 += (int)P) {
@@ -1722,7 +1750,7 @@ static int attn_fabric_groups(void)
             }
         }
         for (unsigned pass = 0; pass < 2; pass++) {
-            const size_t words = pass ? 5140u : 20u;
+            const size_t words = pass ? (size_t)FAB.outb : (size_t)FAB.outa;
             for (i = 0; i < (unsigned)nc; i++) {
                 memset(hdr, 0, sizeof hdr);
                 hdr[0] = 0x7E; hdr[1] = 0xA7; hdr[2] = (uint8_t)pass;
@@ -1731,11 +1759,11 @@ static int attn_fabric_groups(void)
                     hdr[16 + 2 * s] = (uint8_t)ATT_QF[i][s];
                     hdr[17 + 2 * s] = (uint8_t)(ATT_QF[i][s] >> 8);
                     const uint32_t t24 = (uint32_t)ATT_TOP[i][s] & 0xFFFFFFu;
-                    hdr[64 + 3 * s] = (uint8_t)t24;
-                    hdr[65 + 3 * s] = (uint8_t)(t24 >> 8);
-                    hdr[66 + 3 * s] = (uint8_t)(t24 >> 16);
+                    hdr[FAB.off_top + 3 * s] = (uint8_t)t24;
+                    hdr[FAB.off_top + 1 + 3 * s] = (uint8_t)(t24 >> 8);
+                    hdr[FAB.off_top + 2 + 3 * s] = (uint8_t)(t24 >> 16);
                 }
-                memcpy(hdr + 128, ATT_QQ[i], (size_t)FAB_NQ * FAB_FD);
+                memcpy(hdr + FAB.off_qq, ATT_QQ[i], (size_t)FAB_NQ * FAB_FD);
                 copy_in(B1.va + OFF_ATT_HDR + i * ATT_STRIDE, hdr, FAB_HEADER);
             }
             for (i = 0; i < (unsigned)nc; i++) {
@@ -1765,7 +1793,7 @@ static int attn_fabric_groups(void)
                     } else {
                         ATT_SUM[i][s] += ATT_WORDS[i][s];
                         for (int d = 0; d < hd; d++) {
-                            const size_t e = 20u + 2u * ((size_t)s * FAB_FD + (size_t)d);
+                            const size_t e = (size_t)FAB.outa + 2u * ((size_t)s * FAB_FD + (size_t)d);
                             ATT_ACC[i][(size_t)s * FAB_FD + d] +=
                                 (int64_t)(((uint64_t)(int64_t)(int32_t)ATT_WORDS[i][e + 1] << 32)
                                           | ATT_WORDS[i][e]);
@@ -2419,27 +2447,32 @@ static void qkv_post_worker(void *arg, int id, int nt)
             const size_t blk = FAB_BASE_OFF + (size_t)j->seq * R.fab_seq
                              + (((size_t)l * (size_t)R.fab_groups + (size_t)c) * (size_t)R.ctx
                                 + (size_t)pos) * FAB_BLOCK;
-            static const uint8_t zero[FAB_FD] = {0};
-            int8_t row[FAB_FD];
+            static const uint8_t zero[FAB_FDMAX] = {0};
+            const size_t kbase = (size_t)FAB.scb * 32u;
+            const size_t sk = (size_t)(s / 8) * 16u + (size_t)(s % 8) * 2u;
+            int8_t row[FAB_FDMAX];
             uint8_t two[2];
             long clamped = 0;
             uint32_t s16 = fx_u16(1.0f / absmax_int8(row, kg, hd), &clamped);
-            copy_in(B0.va + blk + 32u + (size_t)s * FAB_FD, row, (size_t)hd);
+            copy_in(B0.va + blk + kbase + (size_t)s * FAB_FD, row, (size_t)hd);
             if (hd < FAB_FD)
-                copy_in(B0.va + blk + 32u + (size_t)s * FAB_FD + (size_t)hd, zero, (size_t)(FAB_FD - hd));
+                copy_in(B0.va + blk + kbase + (size_t)s * FAB_FD + (size_t)hd, zero, (size_t)(FAB_FD - hd));
             two[0] = (uint8_t)s16; two[1] = (uint8_t)(s16 >> 8);
-            copy_in(B0.va + blk + 2u * (size_t)s, two, 2);
+            copy_in(B0.va + blk + sk, two, 2);
             s16 = fx_u16(1.0f / absmax_int8(row, vg, hd), &clamped);
-            copy_in(B0.va + blk + 32u + (size_t)(FAB_KV + s) * FAB_FD, row, (size_t)hd);
+            copy_in(B0.va + blk + kbase + (size_t)(FAB_KV + s) * FAB_FD, row, (size_t)hd);
             if (hd < FAB_FD)
-                copy_in(B0.va + blk + 32u + (size_t)(FAB_KV + s) * FAB_FD + (size_t)hd, zero,
+                copy_in(B0.va + blk + kbase + (size_t)(FAB_KV + s) * FAB_FD + (size_t)hd, zero,
                         (size_t)(FAB_FD - hd));
             two[0] = (uint8_t)s16; two[1] = (uint8_t)(s16 >> 8);
-            copy_in(B0.va + blk + 16u + 2u * (size_t)s, two, 2);
+            copy_in(B0.va + blk + (size_t)FAB.scb * 16u + sk, two, 2);
             if (s == 0) {
-                static const uint8_t pad[6] = {0, 0, 0, 0, 0, 0};
-                copy_in(B0.va + blk + 10u, pad, 6);
-                copy_in(B0.va + blk + 26u, pad, 6);
+                static const uint8_t pad[16] = {0};
+                const size_t tail = (size_t)FAB.scb * 16u - (size_t)FAB_KV * 2u;
+                if (tail) {
+                    copy_in(B0.va + blk + (size_t)FAB_KV * 2u, pad, tail);
+                    copy_in(B0.va + blk + (size_t)FAB.scb * 16u + (size_t)FAB_KV * 2u, pad, tail);
+                }
             }
         } else if (R.cache_dtype == CACHE_FX) {
             const size_t sbase = ((size_t)l * M.n_kv + (size_t)g) * (size_t)R.ctx + (size_t)pos;
@@ -3118,6 +3151,11 @@ static void alloc_run(int ctx, int cache_dtype)
         if (!ATT_PORTS) {
             const char *env = getenv("ATTN_PORTS");
             ATT_PORTS = env ? (unsigned)atoi(env) : 2u;
+        }
+        {
+            const char *sh = getenv("ATTN_SHAPE");
+            if (sh && !strcmp(sh, "16x96")) fab_shape(16, 16, 96, 1);
+            else fab_shape(5, 20, 128, 4);
         }
         if (M.head_dim > FAB_FD || M.groups > FAB_QPK || ATT_PORTS < 1 || ATT_PORTS > 4 || ctx > 65535) {
             fprintf(stderr, "bitnet_kria: --cache-dtype fab takes a head dimension up to %d and up to %d query"
