@@ -46,3 +46,5 @@ hardware/attn.vvp
 hardware/attn_16x96.txt
 hardware/hs_err_pid*
 hardware/*.dmp
+hardware/host*.beats
+hardware/host*.want
