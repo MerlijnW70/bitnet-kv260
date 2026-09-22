@@ -1172,6 +1172,10 @@ struct timings {
 #define CACHE_V8 6
 #define FAB_BLOCK 1312u
 #define FAB_HEADER 2688u
+#define FAB_KV 5
+#define FAB_NQ 20
+#define FAB_FD 128
+#define FAB_QPK 4
 #define OFF_ATT_HDR 0x200000u
 #define OFF_ATT_RES 0x280000u
 #define ATT_STRIDE 0x8000u
@@ -1192,6 +1196,7 @@ struct run {
     int slot_pos[BMAX], slot_seq[BMAX];
     int cur_seq, nseq;
     size_t fab_seq;
+    int fab_groups;
     float *hb;
     float *finb;
     int32_t *sqkv, *soi, *sgu, *sd;
@@ -1671,6 +1676,117 @@ static int attn_fabric(void)
     for (int h = 0; h < nq; h++)
         for (int d = 0; d < hd; d++)
             R.cur_out[h * hd + d] = sum[h] ? (float)((double)acc[h * hd + d] / (double)sum[h]) : 0.0f;
+    return 0;
+}
+
+static uint32_t ATT_QF[4][FAB_NQ];
+static int32_t ATT_TOP[4][FAB_NQ];
+static uint64_t ATT_SUM[4][FAB_NQ];
+static int64_t ATT_ACC[4][FAB_NQ * FAB_FD];
+static int8_t ATT_QQ[4][FAB_NQ * FAB_FD];
+
+static int attn_fabric_groups(void)
+{
+    const int hd = M.head_dim, T = R.cur_T, l = R.cur_layer;
+    const int G = R.fab_groups, gq = M.groups;
+    const float scaling = 1.0f / sqrtf((float)hd);
+    const unsigned P = ATT_PORTS < (unsigned)G ? ATT_PORTS : (unsigned)G;
+    uint8_t hdr[FAB_HEADER];
+    unsigned i;
+
+    for (int c0 = 0; c0 < G; c0 += (int)P) {
+        const int nc = c0 + (int)P <= G ? (int)P : G - c0;
+        for (i = 0; i < (unsigned)nc; i++) {
+            const int c = c0 + (int)i;
+            memset(ATT_QQ[i], 0, sizeof ATT_QQ[i]);
+            memset(ATT_ACC[i], 0, sizeof ATT_ACC[i]);
+            for (int s = 0; s < FAB_NQ; s++) {
+                ATT_QF[i][s] = 0;
+                ATT_TOP[i][s] = INT32_MIN;
+                ATT_SUM[i][s] = 0;
+            }
+            for (int g = 0; g < FAB_KV; g++) {
+                const int kvh = c * FAB_KV + g;
+                if (kvh >= M.n_kv) break;
+                for (int j = 0; j < gq; j++) {
+                    const int qh = kvh * gq + j, slot = g * FAB_QPK + j;
+                    if (qh >= M.n_q || slot >= FAB_NQ) break;
+                    const double e = (double)(scaling / absmax_int8(ATT_QQ[i] + (size_t)slot * FAB_FD,
+                                                                   R.cur_q + (size_t)qh * hd, hd));
+                    const long v = lrint(e * 1048576.0);
+                    ATT_QF[i][slot] = v > 65535 ? 65535u : v < 0 ? 0u : (uint32_t)v;
+                }
+            }
+        }
+        for (unsigned pass = 0; pass < 2; pass++) {
+            const size_t words = pass ? 5140u : 20u;
+            for (i = 0; i < (unsigned)nc; i++) {
+                memset(hdr, 0, sizeof hdr);
+                hdr[0] = 0x7E; hdr[1] = 0xA7; hdr[2] = (uint8_t)pass;
+                hdr[4] = (uint8_t)T; hdr[5] = (uint8_t)((unsigned)T >> 8);
+                for (int s = 0; s < FAB_NQ; s++) {
+                    hdr[16 + 2 * s] = (uint8_t)ATT_QF[i][s];
+                    hdr[17 + 2 * s] = (uint8_t)(ATT_QF[i][s] >> 8);
+                    const uint32_t t24 = (uint32_t)ATT_TOP[i][s] & 0xFFFFFFu;
+                    hdr[64 + 3 * s] = (uint8_t)t24;
+                    hdr[65 + 3 * s] = (uint8_t)(t24 >> 8);
+                    hdr[66 + 3 * s] = (uint8_t)(t24 >> 16);
+                }
+                memcpy(hdr + 128, ATT_QQ[i], (size_t)FAB_NQ * FAB_FD);
+                copy_in(B1.va + OFF_ATT_HDR + i * ATT_STRIDE, hdr, FAB_HEADER);
+            }
+            for (i = 0; i < (unsigned)nc; i++) {
+                wr(gpio[i], GPIO_DATA, ATT_SEL);
+                s2mm_start(i, B1.phys + OFF_ATT_RES + i * ATT_STRIDE, words * 4u);
+                mm2s_start(i, B1.phys + OFF_ATT_HDR + i * ATT_STRIDE, FAB_HEADER);
+            }
+            for (i = 0; i < (unsigned)nc; i++)
+                if (wait_ioc(i, MM2S_DMASR, "attention header")) return -1;
+            for (i = 0; i < (unsigned)nc; i++) {
+                const uint64_t base = (uint64_t)((size_t)l * (size_t)G + (size_t)(c0 + (int)i))
+                                      * (uint64_t)R.ctx * FAB_BLOCK;
+                mm2s_start(i, B0.phys + FAB_BASE_OFF + (uint64_t)R.cur_seq * R.fab_seq + base,
+                           (size_t)T * FAB_BLOCK);
+            }
+            for (i = 0; i < (unsigned)nc; i++)
+                if (wait_ioc(i, MM2S_DMASR, "attention cache")) return -1;
+            for (i = 0; i < (unsigned)nc; i++)
+                if (wait_ioc(i, S2MM_DMASR, "attention answers")) return -1;
+            for (i = 0; i < (unsigned)nc; i++) {
+                copy_out(ATT_WORDS[i], &B1, OFF_ATT_RES + i * ATT_STRIDE, words * 4u);
+                for (int s = 0; s < FAB_NQ; s++) {
+                    if (!pass) {
+                        const int32_t v = (int32_t)ATT_WORDS[i][s];
+                        if (v > ATT_TOP[i][s]) ATT_TOP[i][s] = v;
+                    } else {
+                        ATT_SUM[i][s] += ATT_WORDS[i][s];
+                        for (int d = 0; d < hd; d++) {
+                            const size_t e = 20u + 2u * ((size_t)s * FAB_FD + (size_t)d);
+                            ATT_ACC[i][(size_t)s * FAB_FD + d] +=
+                                (int64_t)(((uint64_t)(int64_t)(int32_t)ATT_WORDS[i][e + 1] << 32)
+                                          | ATT_WORDS[i][e]);
+                        }
+                    }
+                }
+            }
+        }
+        for (i = 0; i < (unsigned)nc; i++) wr(gpio[i], GPIO_DATA, 0);
+        for (i = 0; i < (unsigned)nc; i++) {
+            const int c = c0 + (int)i;
+            for (int g = 0; g < FAB_KV; g++) {
+                const int kvh = c * FAB_KV + g;
+                if (kvh >= M.n_kv) break;
+                for (int j = 0; j < gq; j++) {
+                    const int qh = kvh * gq + j, slot = g * FAB_QPK + j;
+                    if (qh >= M.n_q || slot >= FAB_NQ) break;
+                    const double sm = (double)ATT_SUM[i][slot];
+                    for (int d = 0; d < hd; d++)
+                        R.cur_out[(size_t)qh * hd + d] =
+                            sm > 0 ? (float)((double)ATT_ACC[i][(size_t)slot * FAB_FD + d] / sm) : 0.0f;
+                }
+            }
+        }
+    }
     return 0;
 }
 
@@ -2284,20 +2400,28 @@ static void qkv_post_worker(void *arg, int id, int nt)
             for (int d = 0; d < hd; d++) R.cache_kb[vbase + d] = bf16_enc(kg[d]);
             for (int d = 0; d < hd; d++) R.cache_vb[vbase + d] = bf16_enc(vg[d]);
         } else if (R.cache_dtype == CACHE_FAB) {
+            const int c = g / FAB_KV, s = g % FAB_KV;
             const size_t blk = FAB_BASE_OFF + (size_t)j->seq * R.fab_seq
-                             + ((size_t)l * (size_t)R.ctx + (size_t)pos) * FAB_BLOCK;
-            int8_t row[256];
+                             + (((size_t)l * (size_t)R.fab_groups + (size_t)c) * (size_t)R.ctx
+                                + (size_t)pos) * FAB_BLOCK;
+            static const uint8_t zero[FAB_FD] = {0};
+            int8_t row[FAB_FD];
             uint8_t two[2];
             long clamped = 0;
             uint32_t s16 = fx_u16(1.0f / absmax_int8(row, kg, hd), &clamped);
-            copy_in(B0.va + blk + 32u + (size_t)g * (size_t)hd, row, (size_t)hd);
+            copy_in(B0.va + blk + 32u + (size_t)s * FAB_FD, row, (size_t)hd);
+            if (hd < FAB_FD)
+                copy_in(B0.va + blk + 32u + (size_t)s * FAB_FD + (size_t)hd, zero, (size_t)(FAB_FD - hd));
             two[0] = (uint8_t)s16; two[1] = (uint8_t)(s16 >> 8);
-            copy_in(B0.va + blk + 2u * (size_t)g, two, 2);
+            copy_in(B0.va + blk + 2u * (size_t)s, two, 2);
             s16 = fx_u16(1.0f / absmax_int8(row, vg, hd), &clamped);
-            copy_in(B0.va + blk + 32u + (size_t)(M.n_kv + g) * (size_t)hd, row, (size_t)hd);
+            copy_in(B0.va + blk + 32u + (size_t)(FAB_KV + s) * FAB_FD, row, (size_t)hd);
+            if (hd < FAB_FD)
+                copy_in(B0.va + blk + 32u + (size_t)(FAB_KV + s) * FAB_FD + (size_t)hd, zero,
+                        (size_t)(FAB_FD - hd));
             two[0] = (uint8_t)s16; two[1] = (uint8_t)(s16 >> 8);
-            copy_in(B0.va + blk + 16u + 2u * (size_t)g, two, 2);
-            if (g == 0) {
+            copy_in(B0.va + blk + 16u + 2u * (size_t)s, two, 2);
+            if (s == 0) {
                 static const uint8_t pad[6] = {0, 0, 0, 0, 0, 0};
                 copy_in(B0.va + blk + 10u, pad, 6);
                 copy_in(B0.va + blk + 26u, pad, 6);
@@ -2445,7 +2569,7 @@ static int forward_slots(const int *tok, int nb, int nlayers)
             R.cur_layer = l; R.cur_T = R.slot_pos[b] + 1; R.cur_q = R.qf; R.cur_out = R.attn;
             R.cur_seq = R.slot_seq[b];
             if (R.cache_dtype == CACHE_FAB) {
-                if (attn_fabric()) { print_dma_status(); return 3; }
+                if (R.fab_groups > 1 ? attn_fabric_groups() : attn_fabric()) { print_dma_status(); return 3; }
             } else {
                 parallel_for(attn_worker, 0);
             }
@@ -2967,14 +3091,17 @@ static void alloc_run(int ctx, int cache_dtype)
             const char *env = getenv("ATTN_PORTS");
             ATT_PORTS = env ? (unsigned)atoi(env) : 2u;
         }
-        if (M.head_dim != 128 || M.n_kv != 5 || M.n_q != 20 || ATT_PORTS < 1 || ATT_PORTS > 4 || ctx > 65535) {
-            fprintf(stderr, "bitnet_kria: --cache-dtype fab wants head_dim 128, 5 key/value heads, 20 query heads, "
-                            "--attn-ports 1..4 and a context under 65536\n");
+        if (M.head_dim > FAB_FD || M.groups > FAB_QPK || ATT_PORTS < 1 || ATT_PORTS > 4 || ctx > 65535) {
+            fprintf(stderr, "bitnet_kria: --cache-dtype fab takes a head dimension up to %d and up to %d query"
+                            " heads a group; this model has %d and %d. --attn-ports is 1..4 and the context"
+                            " must be under 65536\n",
+                    FAB_FD, FAB_QPK, M.head_dim, M.groups);
             exit(2);
         }
         fx_tables();
+        R.fab_groups = (M.n_kv + FAB_KV - 1) / FAB_KV;
         FAB_BASE_OFF = (M.model_bytes + 0xFFFFFu) & ~(size_t)0xFFFFFu;
-        R.fab_seq = (size_t)M.layers * (size_t)ctx * FAB_BLOCK;
+        R.fab_seq = (size_t)M.layers * (size_t)R.fab_groups * (size_t)ctx * FAB_BLOCK;
         const size_t need = FAB_BASE_OFF + (size_t)(R.nseq < 1 ? 1 : R.nseq) * R.fab_seq;
         if (need > B0.size) {
             fprintf(stderr, "bitnet_kria: %d sequence%s of %d positions need %zu bytes of %s, which has %zu: "
