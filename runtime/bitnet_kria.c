@@ -3155,6 +3155,7 @@ static void alloc_run(int ctx, int cache_dtype)
         {
             const char *sh = getenv("ATTN_SHAPE");
             if (sh && !strcmp(sh, "16x96")) fab_shape(16, 16, 96, 1);
+            else if (sh && !strcmp(sh, "16x128")) fab_shape(16, 16, 128, 1);
             else fab_shape(5, 20, 128, 4);
         }
         if (M.head_dim > FAB_FD || M.groups > FAB_QPK || ATT_PORTS < 1 || ATT_PORTS > 4 || ctx > 65535) {
