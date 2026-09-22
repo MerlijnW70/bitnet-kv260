@@ -2272,15 +2272,17 @@ static void ffn_scale(struct sidejob *j)
 }
 
 struct silujob {
-    const int32_t *g, *u;
+    const int32_t *g;
     const float *gam;
     float *y;
     int8_t *q8;
     unsigned n, r0, len;
+    int stride, boff, nb;
     float kg, ku, qs;
+    float kgv[BMAX], kuv[BMAX];
     double eps, wsd, absmax_y;
-    double sq[MAXT];
-    float mx[MAXT];
+    double sq[BMAX][MAXT];
+    float mx[BMAX][MAXT];
     float fs;
 };
 
@@ -2292,22 +2294,24 @@ static void silu_a_worker(void *arg, int id, int nt)
     const unsigned len = j->len;
     const unsigned lo = j->r0 + (unsigned)((uint64_t)len * (unsigned)id / (unsigned)nt);
     const unsigned hi = j->r0 + (unsigned)((uint64_t)len * (unsigned)(id + 1) / (unsigned)nt);
-    const int32_t *g = j->g, *u = j->u;
+    const int32_t *g = j->g;
     const float *gam = j->gam;
+    const int st = j->stride, bo = j->boff, b = j->nb > 1 ? bo : 0;
+    const unsigned ub = j->n;
     float *y = j->y;
-    const float kg = j->kg, ku = j->ku;
-    double sq = j->sq[id];
-    float mx = j->mx[id];
+    const float kg = j->kgv[b], ku = j->kuv[b];
+    double sq = j->sq[b][id];
+    float mx = j->mx[b][id];
     for (unsigned i = lo; i < hi; i++) {
-        float G = (float)g[i] * kg;
-        float v = (G / (1.0f + expf(-G))) * ((float)u[i] * ku);
+        float G = (float)g[(size_t)i * st + bo] * kg;
+        float v = (G / (1.0f + expf(-G))) * ((float)g[(size_t)(ub + i) * st + bo] * ku);
         float a = fabsf(v * gam[i]);
         y[i] = v;
         sq += (double)v * (double)v;
         if (a > mx) mx = a;
     }
-    j->sq[id] = sq;
-    j->mx[id] = mx;
+    j->sq[b][id] = sq;
+    j->mx[b][id] = mx;
 }
 
 static void silu_b_worker(void *arg, int id, int nt)
@@ -2333,14 +2337,19 @@ static void silu_chunk(void *arg, unsigned c, unsigned ch)
     struct silujob *j = arg;
     double t0 = now_ms();
     const unsigned half = j->n / 2, cr = half / ch;
-    const size_t cb = (size_t)cr * 4u;
+    const int nb = j->nb;
+    const size_t cb = (size_t)cr * 4u * (size_t)nb;
     for (unsigned e = 0; e < E; e++)
-        inval_range(B1.cva + OFF_GU + (size_t)e * half * 4u + (size_t)c * cb, cb);
-    j->r0 = c * cr;
-    j->len = cr;
-    parallel_for(silu_a_worker, j);
-    j->r0 = half + c * cr;
-    parallel_for(silu_a_worker, j);
+        inval_range(B1.cva + OFF_GU + (size_t)e * half * 4u * (size_t)nb + (size_t)c * cb, cb);
+    for (int b = 0; b < nb; b++) {
+        j->boff = nb > 1 ? b : 0;
+        j->y = R.ffn + (size_t)b * j->n;
+        j->r0 = c * cr;
+        j->len = cr;
+        parallel_for(silu_a_worker, j);
+        j->r0 = half + c * cr;
+        parallel_for(silu_a_worker, j);
+    }
     double d = now_ms() - t0;
     CHUNK_WORK_MS += d;
     R.t.scan += d;
@@ -2348,15 +2357,16 @@ static void silu_chunk(void *arg, unsigned c, unsigned ch)
 
 static void silu_ffn(struct silujob *j, int nt, int done)
 {
+    const int b = j->nb > 1 ? j->boff : 0;
     if (!done) {
-        for (int i = 0; i < nt; i++) { j->sq[i] = 0; j->mx[i] = 0; }
+        for (int i = 0; i < nt; i++) { j->sq[b][i] = 0; j->mx[b][i] = 0; }
         j->r0 = 0;
         j->len = j->n;
         parallel_for(silu_a_worker, j);
     }
     double sq = 0;
     float mx = 0;
-    for (int i = 0; i < nt; i++) { sq += j->sq[i]; if (j->mx[i] > mx) mx = j->mx[i]; }
+    for (int i = 0; i < nt; i++) { sq += j->sq[b][i]; if (j->mx[b][i] > mx) mx = j->mx[b][i]; }
     double inv = 1.0 / sqrt(sq / (double)j->n + j->eps);
     double amax = (double)mx * inv;
     if (!(amax > 1e-5)) amax = 1e-5;
@@ -2465,11 +2475,19 @@ static struct stage_sink SINK;
 
 static const int32_t *sums_slot(size_t off, unsigned n, int nb, int b, int32_t *scratch)
 {
+    if (nb == 1) return (const int32_t *)(const void *)(B1.cva + off);
+    return scratch + (size_t)b * n;
+}
+
+static void sums_spread(size_t off, unsigned n, int nb, int32_t *scratch)
+{
+    if (nb == 1) return;
     const int32_t *p = (const int32_t *)(const void *)(B1.cva + off);
-    if (nb == 1) return p;
-    int32_t *d = scratch + (size_t)b * n;
-    for (unsigned i = 0; i < n; i++) d[i] = p[(size_t)i * (unsigned)nb + (unsigned)b];
-    return d;
+    for (unsigned i = 0; i < n; i++) {
+        const int32_t *s = p + (size_t)i * (unsigned)nb;
+        int32_t *d = scratch + i;
+        for (int b = 0; b < nb; b++) d[(size_t)b * n] = s[b];
+    }
 }
 
 static int forward_slots(const int *tok, int nb, int nlayers)
@@ -2541,6 +2559,7 @@ static int forward_slots(const int *tok, int nb, int nlayers)
         }
         t0 = now_ms();
         sums_in(&B1, OFF_QKV, (size_t)nqkv * nbu * 4);
+        sums_spread(OFF_QKV, nqkv, nb, R.sqkv);
         R.t.copyout += now_ms() - t0;
 
         for (int b = 0; b < nb; b++) {
@@ -2599,6 +2618,7 @@ static int forward_slots(const int *tok, int nb, int nlayers)
         }
         t0 = now_ms();
         sums_in(&B1, OFF_OI, (size_t)H * nbu * 4);
+        sums_spread(OFF_OI, (unsigned)H, nb, R.soi);
         R.t.copyout += now_ms() - t0;
         for (int b = 0; b < nb; b++) {
             t0 = now_ms();
@@ -2625,14 +2645,17 @@ static int forward_slots(const int *tok, int nb, int nlayers)
                 w[i] = B0.phys + M.mat[l][PROJ_GATE].offset + (uint64_t)i * npe * B1_ * BEAT_BYTES;
                 r[i] = gu_res + (uint64_t)i * npe * nbu * 4u;
             }
-            if (nb == 1 && M.silu) {
-                SB.g = (const int32_t *)(const void *)(B1.cva + OFF_GU); SB.u = SB.g + I;
-                SB.gam = M.ffn_sub[l]; SB.n = (unsigned)I; SB.y = R.ffn; SB.q8 = R.q8; SB.eps = M.eps;
-                SB.kg = (float)(M.mat[l][PROJ_GATE].ws / sx2[0]);
-                SB.ku = (float)(M.mat[l][PROJ_UP].ws / sx2[0]);
+            if (M.silu) {
+                SB.g = (const int32_t *)(const void *)(B1.cva + OFF_GU);
+                SB.gam = M.ffn_sub[l]; SB.n = (unsigned)I; SB.q8 = R.q8; SB.eps = M.eps;
+                SB.nb = nb; SB.stride = nb; SB.boff = 0;
                 SB.wsd = M.mat[l][PROJ_DOWN].ws;
-                for (int i = 0; i < MAXT; i++) { SB.sq[i] = 0; SB.mx[i] = 0; }
-                if (engine_phase("gate+up", B1_, 1u, npe, act_phys, vec_h, w, r, &R.t.act, &R.t.eng_gu, 1,
+                for (int b = 0; b < nb; b++) {
+                    SB.kgv[b] = (float)(M.mat[l][PROJ_GATE].ws / sx2[b]);
+                    SB.kuv[b] = (float)(M.mat[l][PROJ_UP].ws / sx2[b]);
+                    for (int i = 0; i < MAXT; i++) { SB.sq[b][i] = 0; SB.mx[b][i] = 0; }
+                }
+                if (engine_phase("gate+up", B1_, nbu, npe, act_phys, vec_h, w, r, &R.t.act, &R.t.eng_gu, 1,
                                  R.gu_chunks, silu_chunk, &SB)) return 3;
             } else if (nb == 1) {
                 FP.beats = B1.va + OFF_BEATS;
@@ -2647,6 +2670,7 @@ static int forward_slots(const int *tok, int nb, int nlayers)
         if (nb > 1) {
             t0 = now_ms();
             sums_in(&B1, OFF_GU, (size_t)ngu * nbu * 4);
+            sums_spread(OFF_GU, ngu, nb, R.sgu);
             R.t.copyout += now_ms() - t0;
         }
 
@@ -2672,14 +2696,9 @@ static int forward_slots(const int *tok, int nb, int nlayers)
 
             if (M.silu) {
                 t0 = now_ms();
-                if (nb > 1) {
-                    SB.g = gi; SB.u = ui; SB.gam = M.ffn_sub[l]; SB.n = (unsigned)I;
-                    SB.y = R.ffn; SB.q8 = R.q8; SB.eps = M.eps;
-                    SB.kg = (float)(M.mat[l][PROJ_GATE].ws / sx2[b]);
-                    SB.ku = (float)(M.mat[l][PROJ_UP].ws / sx2[b]);
-                    SB.wsd = M.mat[l][PROJ_DOWN].ws;
-                }
-                silu_ffn(&SB, POOL.n > 0 ? POOL.n : 1, nb == 1);
+                SB.boff = nb > 1 ? b : 0;
+                SB.y = R.ffn + (size_t)b * (size_t)I;
+                silu_ffn(&SB, POOL.n > 0 ? POOL.n : 1, 1);
                 fs[b] = SB.fs;
                 R.t.scan += now_ms() - t0;
                 t0 = now_ms();
@@ -2753,6 +2772,7 @@ static int forward_slots(const int *tok, int nb, int nlayers)
         }
         t0 = now_ms();
         sums_in(&B1, OFF_D, (size_t)H * nbu * 4);
+        sums_spread(OFF_D, (unsigned)H, nb, R.sd);
         R.t.copyout += now_ms() - t0;
         for (int b = 0; b < nb; b++) {
             t0 = now_ms();
@@ -3173,7 +3193,7 @@ static void alloc_run(int ctx, int cache_dtype)
     R.hglue = xmalloc(sizeof(int32_t) * (size_t)I);
     R.q8 = xmalloc((size_t)I);
     R.scratch = xmalloc(sizeof(uint32_t) * (size_t)(2 * I));
-    R.ffn = xmalloc(sizeof(float) * (size_t)I);
+    R.ffn = xmalloc(sizeof(float) * (size_t)I * BMAX);
     R.logits = xmalloc(sizeof(float) * (size_t)M.vocab);
     R.hq = xmalloc((size_t)H);
     R.hcand = xmalloc(sizeof(float) * (size_t)(MAXT + 1) * (size_t)R.head_k);
