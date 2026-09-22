@@ -1168,6 +1168,8 @@ struct timings {
 #define CACHE_I8 2
 #define CACHE_FX 3
 #define CACHE_FAB 4
+#define CACHE_K8 5
+#define CACHE_V8 6
 #define FAB_BLOCK 1312u
 #define FAB_HEADER 2688u
 #define OFF_ATT_HDR 0x200000u
@@ -1180,7 +1182,7 @@ static int GEN_FILL;
 
 struct run {
     int ctx;
-    int cache_dtype;
+    int cache_dtype, k_i8, v_i8;
     float *cache_k, *cache_v;
     size_t ldk, kt_tile, kt_head, kt_layer, v_head, v_layer;
     uint16_t *cache_kb, *cache_vb;
@@ -1689,7 +1691,7 @@ static void attn_worker(void *arg, int id, int nt)
         }
         int8_t qq[ATT_MAXG * 256];
         float qs[ATT_MAXG];
-        if (R.cache_dtype == CACHE_I8 || R.cache_dtype == CACHE_FX)
+        if (R.k_i8 || R.cache_dtype == CACHE_FX)
             for (int h = 0; h < nh; h++)
                 qs[h] = scaling / absmax_int8(qq + (size_t)h * hd, R.cur_q + (size_t)(hq + h) * hd, hd);
         if (R.cache_dtype == CACHE_FX) {
@@ -1700,7 +1702,17 @@ static void attn_worker(void *arg, int id, int nt)
         }
         for (int tb = 0; tb < T; tb += ATT_TB) {
             const int tn = tb + ATT_TB < T ? ATT_TB : T - tb;
-            if (R.cache_dtype == CACHE_F32) {
+            if (R.k_i8) {
+                scores_i8_group(scp, mx, R.cache_k8 + vbase + (size_t)tb * hd, R.cache_ks + sbase + tb,
+                                qq, qs, nh, tb, tn, hd);
+            } else if (R.cache_dtype == CACHE_BF16) {
+                for (int h = 0; h < nh; h++) {
+                    float *sc = scp[h] + tb;
+                    const float *q = R.cur_q + (size_t)(hq + h) * hd;
+                    float m = scores_bf16(sc, R.cache_kb + vbase + (size_t)tb * hd, q, tn, hd, scaling);
+                    if (m > mx[h]) mx[h] = m;
+                }
+            } else {
                 const float *kt = R.cache_k + ktbase + (size_t)(tb / ATT_TB) * R.kt_tile;
                 int t = 0;
                 for (; t + 16 <= tn; t += 16) {
@@ -1725,16 +1737,6 @@ static void attn_worker(void *arg, int id, int nt)
                 for (int h = 0; h < nh; h++)
                     for (int j = 0; j < tn; j++)
                         if (scp[h][tb + j] > mx[h]) mx[h] = scp[h][tb + j];
-            } else if (R.cache_dtype == CACHE_I8) {
-                scores_i8_group(scp, mx, R.cache_k8 + vbase + (size_t)tb * hd, R.cache_ks + sbase + tb,
-                                qq, qs, nh, tb, tn, hd);
-            } else {
-                for (int h = 0; h < nh; h++) {
-                    float *sc = scp[h] + tb;
-                    const float *q = R.cur_q + (size_t)(hq + h) * hd;
-                    float m = scores_bf16(sc, R.cache_kb + vbase + (size_t)tb * hd, q, tn, hd, scaling);
-                    if (m > mx[h]) mx[h] = m;
-                }
             }
         }
         for (int h = 0; h < nh; h++) {
@@ -1747,7 +1749,7 @@ static void attn_worker(void *arg, int id, int nt)
         }
         for (int tb = 0; tb < T; tb += ATT_TB) {
             const int tn = tb + ATT_TB < T ? ATT_TB : T - tb;
-            if (R.cache_dtype == CACHE_F32) {
+            if (!R.v_i8 && R.cache_dtype != CACHE_BF16) {
                 const float *V = R.cache_v + vbase + (size_t)tb * hd;
                 for (int h = 0; h < nh; h++) accum_f32(outp[h], V, scp[h] + tb, tn, hd);
             } else {
@@ -2146,7 +2148,7 @@ struct silujob {
     const float *gam;
     float *y;
     int8_t *q8;
-    unsigned n;
+    unsigned n, r0, len;
     float kg, ku, qs;
     double eps, wsd, absmax_y;
     double sq[MAXT];
@@ -2159,15 +2161,15 @@ static struct silujob SB;
 static void silu_a_worker(void *arg, int id, int nt)
 {
     struct silujob *j = arg;
-    const unsigned n = j->n;
-    const unsigned lo = (unsigned)((uint64_t)n * (unsigned)id / (unsigned)nt);
-    const unsigned hi = (unsigned)((uint64_t)n * (unsigned)(id + 1) / (unsigned)nt);
+    const unsigned len = j->len;
+    const unsigned lo = j->r0 + (unsigned)((uint64_t)len * (unsigned)id / (unsigned)nt);
+    const unsigned hi = j->r0 + (unsigned)((uint64_t)len * (unsigned)(id + 1) / (unsigned)nt);
     const int32_t *g = j->g, *u = j->u;
     const float *gam = j->gam;
     float *y = j->y;
     const float kg = j->kg, ku = j->ku;
-    double sq = 0;
-    float mx = 0;
+    double sq = j->sq[id];
+    float mx = j->mx[id];
     for (unsigned i = lo; i < hi; i++) {
         float G = (float)g[i] * kg;
         float v = (G / (1.0f + expf(-G))) * ((float)u[i] * ku);
@@ -2198,10 +2200,32 @@ static void silu_b_worker(void *arg, int id, int nt)
     }
 }
 
-static void silu_ffn(struct silujob *j, int nt)
+static void silu_chunk(void *arg, unsigned c, unsigned ch)
 {
-    for (int i = 0; i < nt; i++) { j->sq[i] = 0; j->mx[i] = 0; }
+    struct silujob *j = arg;
+    double t0 = now_ms();
+    const unsigned half = j->n / 2, cr = half / ch;
+    const size_t cb = (size_t)cr * 4u;
+    for (unsigned e = 0; e < E; e++)
+        inval_range(B1.cva + OFF_GU + (size_t)e * half * 4u + (size_t)c * cb, cb);
+    j->r0 = c * cr;
+    j->len = cr;
     parallel_for(silu_a_worker, j);
+    j->r0 = half + c * cr;
+    parallel_for(silu_a_worker, j);
+    double d = now_ms() - t0;
+    CHUNK_WORK_MS += d;
+    R.t.scan += d;
+}
+
+static void silu_ffn(struct silujob *j, int nt, int done)
+{
+    if (!done) {
+        for (int i = 0; i < nt; i++) { j->sq[i] = 0; j->mx[i] = 0; }
+        j->r0 = 0;
+        j->len = j->n;
+        parallel_for(silu_a_worker, j);
+    }
     double sq = 0;
     float mx = 0;
     for (int i = 0; i < nt; i++) { sq += j->sq[i]; if (j->mx[i] > mx) mx = j->mx[i]; }
@@ -2209,7 +2233,7 @@ static void silu_ffn(struct silujob *j, int nt)
     double amax = (double)mx * inv;
     if (!(amax > 1e-5)) amax = 1e-5;
     j->absmax_y = amax;
-    j->qs = (float)(inv * 127.0 / amax);
+    j->qs = amax > (double)mx * inv ? (float)(inv * 127.0 / amax) : (float)(127.0 / (double)mx);
     j->fs = (float)(j->wsd * amax / 127.0);
     parallel_for(silu_b_worker, j);
 }
@@ -2271,15 +2295,20 @@ static void qkv_post_worker(void *arg, int id, int nt)
                 copy_in(B0.va + blk + 10u, pad, 6);
                 copy_in(B0.va + blk + 26u, pad, 6);
             }
-        } else if (R.cache_dtype == CACHE_I8 || R.cache_dtype == CACHE_FX) {
+        } else if (R.cache_dtype == CACHE_FX) {
             const size_t sbase = ((size_t)l * M.n_kv + (size_t)g) * (size_t)R.ctx + (size_t)pos;
             R.cache_ks[sbase] = 1.0f / absmax_int8(R.cache_k8 + vbase, kg, hd);
             R.cache_vs[sbase] = 1.0f / absmax_int8(R.cache_v8 + vbase, vg, hd);
         } else {
-            float *kt = R.cache_k + (size_t)l * R.kt_layer + (size_t)g * R.kt_head
-                        + (size_t)(pos / ATT_TB) * R.kt_tile + (size_t)(pos % ATT_TB);
-            for (int d = 0; d < hd; d++) kt[(size_t)d * R.ldk] = kg[d];
-            memcpy(R.cache_v + vbase, vg, sizeof(float) * hd);
+            const size_t sbase = ((size_t)l * M.n_kv + (size_t)g) * (size_t)R.ctx + (size_t)pos;
+            if (R.k_i8) R.cache_ks[sbase] = 1.0f / absmax_int8(R.cache_k8 + vbase, kg, hd);
+            else {
+                float *kt = R.cache_k + (size_t)l * R.kt_layer + (size_t)g * R.kt_head
+                            + (size_t)(pos / ATT_TB) * R.kt_tile + (size_t)(pos % ATT_TB);
+                for (int d = 0; d < hd; d++) kt[(size_t)d * R.ldk] = kg[d];
+            }
+            if (R.v_i8) R.cache_vs[sbase] = 1.0f / absmax_int8(R.cache_v8 + vbase, vg, hd);
+            else memcpy(R.cache_v + vbase, vg, sizeof(float) * hd);
         }
     }
 }
@@ -2459,7 +2488,16 @@ static int forward_slots(const int *tok, int nb, int nlayers)
                 w[i] = B0.phys + M.mat[l][PROJ_GATE].offset + (uint64_t)i * npe * B1_ * BEAT_BYTES;
                 r[i] = gu_res + (uint64_t)i * npe * nbu * 4u;
             }
-            if (nb == 1) {
+            if (nb == 1 && M.silu) {
+                SB.g = (const int32_t *)(const void *)(B1.cva + OFF_GU); SB.u = SB.g + I;
+                SB.gam = M.ffn_sub[l]; SB.n = (unsigned)I; SB.y = R.ffn; SB.q8 = R.q8; SB.eps = M.eps;
+                SB.kg = (float)(M.mat[l][PROJ_GATE].ws / sx2[0]);
+                SB.ku = (float)(M.mat[l][PROJ_UP].ws / sx2[0]);
+                SB.wsd = M.mat[l][PROJ_DOWN].ws;
+                for (int i = 0; i < MAXT; i++) { SB.sq[i] = 0; SB.mx[i] = 0; }
+                if (engine_phase("gate+up", B1_, 1u, npe, act_phys, vec_h, w, r, &R.t.act, &R.t.eng_gu, 1,
+                                 R.gu_chunks, silu_chunk, &SB)) return 3;
+            } else if (nb == 1) {
                 FP.beats = B1.va + OFF_BEATS;
                 FP.g = (const int32_t *)(const void *)(B1.cva + OFF_GU); FP.u = FP.g + I;
                 memset(FP.mg, 0, sizeof FP.mg);
@@ -2497,12 +2535,14 @@ static int forward_slots(const int *tok, int nb, int nlayers)
 
             if (M.silu) {
                 t0 = now_ms();
-                SB.g = gi; SB.u = ui; SB.gam = M.ffn_sub[l]; SB.n = (unsigned)I;
-                SB.y = R.ffn; SB.q8 = R.q8; SB.eps = M.eps;
-                SB.kg = (float)(M.mat[l][PROJ_GATE].ws / sx2[b]);
-                SB.ku = (float)(M.mat[l][PROJ_UP].ws / sx2[b]);
-                SB.wsd = M.mat[l][PROJ_DOWN].ws;
-                silu_ffn(&SB, POOL.n > 0 ? POOL.n : 1);
+                if (nb > 1) {
+                    SB.g = gi; SB.u = ui; SB.gam = M.ffn_sub[l]; SB.n = (unsigned)I;
+                    SB.y = R.ffn; SB.q8 = R.q8; SB.eps = M.eps;
+                    SB.kg = (float)(M.mat[l][PROJ_GATE].ws / sx2[b]);
+                    SB.ku = (float)(M.mat[l][PROJ_UP].ws / sx2[b]);
+                    SB.wsd = M.mat[l][PROJ_DOWN].ws;
+                }
+                silu_ffn(&SB, POOL.n > 0 ? POOL.n : 1, nb == 1);
                 fs[b] = SB.fs;
                 R.t.scan += now_ms() - t0;
                 t0 = now_ms();
@@ -2900,6 +2940,8 @@ static void alloc_run(int ctx, int cache_dtype)
     const int H = M.hidden, I = M.inter;
     R.ctx = ctx;
     R.cache_dtype = cache_dtype;
+    R.k_i8 = cache_dtype == CACHE_I8 || cache_dtype == CACHE_K8;
+    R.v_i8 = cache_dtype == CACHE_I8 || cache_dtype == CACHE_V8;
     const size_t tiles = ((size_t)ctx + ATT_TB - 1) / ATT_TB;
     R.ldk = ATT_TB;
     R.kt_tile = (size_t)M.head_dim * ATT_TB;
@@ -2932,16 +2974,18 @@ static void alloc_run(int ctx, int cache_dtype)
                     R.nseq < 1 ? 1 : R.nseq, R.nseq == 1 ? "" : "s", ctx, need, B0.dev, B0.size);
             exit(2);
         }
-    } else if (cache_dtype == CACHE_I8 || cache_dtype == CACHE_FX) {
+    } else if (cache_dtype == CACHE_I8 || cache_dtype == CACHE_FX
+               || cache_dtype == CACHE_K8 || cache_dtype == CACHE_V8) {
         if (cache_dtype == CACHE_FX) fx_tables();
         if (M.head_dim > 256) {
             fprintf(stderr, "bitnet_kria: the int8 cache takes a head dimension up to 256, this model has %d\n", M.head_dim);
             exit(2);
         }
-        R.cache_k8 = xmalloc(cells);
-        R.cache_v8 = xmalloc(cells);
-        R.cache_ks = xmalloc(sizeof(float) * (size_t)M.layers * M.n_kv * ctx);
-        R.cache_vs = xmalloc(sizeof(float) * (size_t)M.layers * M.n_kv * ctx);
+        const size_t sc = sizeof(float) * (size_t)M.layers * M.n_kv * ctx;
+        if (cache_dtype == CACHE_V8) R.cache_k = xmalloc(ktcells * 4);
+        else { R.cache_k8 = xmalloc(cells); R.cache_ks = xmalloc(sc); }
+        if (cache_dtype == CACHE_K8) R.cache_v = xmalloc(cells * 4);
+        else { R.cache_v8 = xmalloc(cells); R.cache_vs = xmalloc(sc); }
     } else {
         R.cache_k = xmalloc(ktcells * 4);
         R.cache_v = xmalloc(cells * 4);
@@ -3112,7 +3156,7 @@ static int usage(void)
 {
     fprintf(stderr, "usage: sudo ./bitnet_kria [--dir DIR] [--max-new N] [--context N] [--threads N] [--layers N]\n"
                     "                          [--temp T] [--top-p P] [--seed N] [--timing] [--quiet] [--no-mlock]\n"
-                    "                          [--cache-dtype f32|bf16|i8] [--stage-check FILE [--check-layers N]]\n"
+                    "                          [--cache-dtype f32|bf16|i8|k8|v8] [--stage-check FILE [--check-layers N]]\n"
                     "                          [--verify-weights] [--timeout MS] [--gpio HEX] [--dma HEX]\n"
                     "                          [--stride HEX] [--glue-gpio HEX] [--glue-params HEX]\n"
                     "                          [--glue-dma HEX] [--buf0 DEV] [--buf1 DEV] [--buf2 DEV]\n"
@@ -3179,6 +3223,8 @@ int main(int argc, char **argv)
             if (!strcmp(v, "f32")) cache_dtype = CACHE_F32;
             else if (!strcmp(v, "bf16")) cache_dtype = CACHE_BF16;
             else if (!strcmp(v, "i8")) cache_dtype = CACHE_I8;
+            else if (!strcmp(v, "k8")) cache_dtype = CACHE_K8;
+            else if (!strcmp(v, "v8")) cache_dtype = CACHE_V8;
             else if (!strcmp(v, "fx")) cache_dtype = CACHE_FX;
             else if (!strcmp(v, "fab")) cache_dtype = CACHE_FAB;
             else { fprintf(stderr, "bitnet_kria: --cache-dtype takes f32, bf16 or i8, not %s\n", v); return 2; }
