@@ -991,6 +991,7 @@ struct model {
     unsigned head_t_beats, head_t_npe;
     size_t model_bytes, head_t_bytes;
     unsigned wpb, wpby;
+    int silu;
     char enc[16], model_file[64], head_file[64];
 };
 
@@ -1977,10 +1978,11 @@ static void ffn_prep_a_worker(void *arg, int id, int nt)
     for (unsigned h = 0; h < 2; h++) {
         const unsigned base = h ? p->r1 : p->r0;
         unsigned i;
-        for (i = base + lo; i < base + hi; i++) {
-            q[2 * i] = (uint64_t)(uint32_t)g[i] | (uint64_t)(uint32_t)u[i] << 32;
-            q[2 * i + 1] = (uint64_t)(uint16_t)G[i];
-        }
+        if (!M.silu)
+            for (i = base + lo; i < base + hi; i++) {
+                q[2 * i] = (uint64_t)(uint32_t)g[i] | (uint64_t)(uint32_t)u[i] << 32;
+                q[2 * i + 1] = (uint64_t)(uint16_t)G[i];
+            }
         i = base + lo;
 #ifdef __aarch64__
         {
@@ -2135,6 +2137,79 @@ static void ffn_scale(struct sidejob *j)
     double denom = sqrt(sumsq / (double)I + j->eps / (Kc * Kc));
     j->absmax_y = denom > 0 ? amax / denom : 0.0;
     j->fs = (float)(j->wsd * j->absmax_y / 127.0);
+}
+
+struct silujob {
+    const int32_t *g, *u;
+    const float *gam;
+    float *y;
+    int8_t *q8;
+    unsigned n;
+    float kg, ku, qs;
+    double eps, wsd, absmax_y;
+    double sq[MAXT];
+    float mx[MAXT];
+    float fs;
+};
+
+static struct silujob SB;
+
+static void silu_a_worker(void *arg, int id, int nt)
+{
+    struct silujob *j = arg;
+    const unsigned n = j->n;
+    const unsigned lo = (unsigned)((uint64_t)n * (unsigned)id / (unsigned)nt);
+    const unsigned hi = (unsigned)((uint64_t)n * (unsigned)(id + 1) / (unsigned)nt);
+    const int32_t *g = j->g, *u = j->u;
+    const float *gam = j->gam;
+    float *y = j->y;
+    const float kg = j->kg, ku = j->ku;
+    double sq = 0;
+    float mx = 0;
+    for (unsigned i = lo; i < hi; i++) {
+        float G = (float)g[i] * kg;
+        float v = (G / (1.0f + expf(-G))) * ((float)u[i] * ku);
+        float a = fabsf(v * gam[i]);
+        y[i] = v;
+        sq += (double)v * (double)v;
+        if (a > mx) mx = a;
+    }
+    j->sq[id] = sq;
+    j->mx[id] = mx;
+}
+
+static void silu_b_worker(void *arg, int id, int nt)
+{
+    struct silujob *j = arg;
+    const unsigned n = j->n;
+    const unsigned lo = (unsigned)((uint64_t)n * (unsigned)id / (unsigned)nt);
+    const unsigned hi = (unsigned)((uint64_t)n * (unsigned)(id + 1) / (unsigned)nt);
+    const float *y = j->y, *gam = j->gam;
+    const float qs = j->qs;
+    int8_t *q8 = j->q8;
+    for (unsigned i = lo; i < hi; i++) {
+        float v = y[i] * gam[i] * qs;
+        long r = lrintf(v);
+        if (r > 127) r = 127;
+        if (r < -128) r = -128;
+        q8[i] = (int8_t)r;
+    }
+}
+
+static void silu_ffn(struct silujob *j, int nt)
+{
+    for (int i = 0; i < nt; i++) { j->sq[i] = 0; j->mx[i] = 0; }
+    parallel_for(silu_a_worker, j);
+    double sq = 0;
+    float mx = 0;
+    for (int i = 0; i < nt; i++) { sq += j->sq[i]; if (j->mx[i] > mx) mx = j->mx[i]; }
+    double inv = 1.0 / sqrt(sq / (double)j->n + j->eps);
+    double amax = (double)mx * inv;
+    if (!(amax > 1e-5)) amax = 1e-5;
+    j->absmax_y = amax;
+    j->qs = (float)(inv * 127.0 / amax);
+    j->fs = (float)(j->wsd * amax / 127.0);
+    parallel_for(silu_b_worker, j);
 }
 
 static void side_ffn(void)
@@ -2418,6 +2493,26 @@ static int forward_slots(const int *tok, int nb, int nlayers)
             }
             if (trace) { memcpy(SINK.l0_g, gi, sizeof(int32_t) * I); memcpy(SINK.l0_u, ui, sizeof(int32_t) * I); }
 
+            if (M.silu) {
+                t0 = now_ms();
+                SB.g = gi; SB.u = ui; SB.gam = M.ffn_sub[l]; SB.n = (unsigned)I;
+                SB.y = R.ffn; SB.q8 = R.q8; SB.eps = M.eps;
+                SB.kg = (float)(M.mat[l][PROJ_GATE].ws / sx2[b]);
+                SB.ku = (float)(M.mat[l][PROJ_UP].ws / sx2[b]);
+                SB.wsd = M.mat[l][PROJ_DOWN].ws;
+                silu_ffn(&SB, POOL.n > 0 ? POOL.n : 1);
+                fs[b] = SB.fs;
+                R.t.scan += now_ms() - t0;
+                t0 = now_ms();
+                copy_in(B1.va + OFF_Q8 + (size_t)b * vec_i, R.q8, (size_t)I);
+                R.t.copyout += now_ms() - t0;
+                if (trace) {
+                    memcpy(SINK.l0_q8, R.q8, (size_t)I);
+                    SINK.l0_absmax_y = (float)SB.absmax_y;
+                }
+                continue;
+            }
+
             t0 = now_ms();
             parallel_for(ffn_prep_worker, &FP);
             R.t.scan += now_ms() - t0;
@@ -2437,7 +2532,7 @@ static int forward_slots(const int *tok, int nb, int nlayers)
             }
         }
 
-        for (int b = 0; b < nb; b++) {
+        for (int b = 0; b < nb && !M.silu; b++) {
             const struct shifts sh = shb[b];
             uint32_t gs;
             uint32_t params = PARAMS(sh.s_g, sh.s_u, sh.s_S, sh.s_T, sh.s_V);
@@ -2878,6 +2973,7 @@ static void alloc_run(int ctx, int cache_dtype)
     R.hglue = xmalloc(sizeof(int32_t) * (size_t)I);
     R.q8 = xmalloc((size_t)I);
     R.scratch = xmalloc(sizeof(uint32_t) * (size_t)(2 * I));
+    R.ffn = xmalloc(sizeof(float) * (size_t)I);
     R.logits = xmalloc(sizeof(float) * (size_t)M.vocab);
     R.hq = xmalloc((size_t)H);
     R.hcand = xmalloc(sizeof(float) * (size_t)(MAXT + 1) * (size_t)R.head_k);
@@ -3128,6 +3224,15 @@ int main(int argc, char **argv)
     M.vocab = (int)jnum(geo, "vocab_size", 0);
     M.theta = jnum(geo, "rope_theta", 500000.0);
     M.eps = jnum(geo, "rms_norm_eps", 1e-5);
+    {
+        const char *act = jstr(geo, "hidden_act");
+        M.silu = act && !strcmp(act, "silu");
+        if (act && strcmp(act, "silu") && strcmp(act, "relu2")) {
+            fprintf(stderr, "bitnet_kria: the manifest asks for the gate %s, which this runtime"
+                            " does not compute; it knows relu2 and silu\n", act);
+            return 2;
+        }
+    }
     M.groups = M.n_q / M.n_kv;
     if (layers_opt > 0 && layers_opt < M.layers) M.layers = layers_opt;
     if (M.layers > 64) { fprintf(stderr, "bitnet_kria: more than 64 layers\n"); return 2; }
@@ -3354,8 +3459,9 @@ int main(int argc, char **argv)
     wr(ggpio_a, GPIO_DATA, 0);
 
     if (!quiet) {
-        printf("BitNet b1.58 2B4T on the KV260: %d layers, hidden %d, intermediate %d, %d q heads over %d kv heads of %d, vocab %d\n",
-               M.layers, M.hidden, M.inter, M.n_q, M.n_kv, M.head_dim, M.vocab);
+        printf("BitNet b1.58 on the KV260: %d layers, hidden %d, intermediate %d, %d q heads over %d kv heads of %d, vocab %d, %s gate\n",
+               M.layers, M.hidden, M.inter, M.n_q, M.n_kv, M.head_dim, M.vocab,
+               M.silu ? "silu on the A53s" : "relu2 in the glue");
         printf("  %s phys 0x%010" PRIx64 " size %zu: %s %zu bytes read in %.2f s (%.0f MB/s)\n",
                B0.dev, B0.phys, B0.size, M.model_file, M.model_bytes, load_s, M.model_bytes / load_s / 1e6);
         printf("  %s phys 0x%010" PRIx64 " size %zu: activations, sums and glue beats need %u bytes\n", B1.dev, B1.phys, B1.size, NEED1);
