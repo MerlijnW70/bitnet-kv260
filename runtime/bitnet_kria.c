@@ -1196,7 +1196,7 @@ struct run {
     int slot_pos[BMAX], slot_seq[BMAX];
     int cur_seq, nseq;
     size_t fab_seq;
-    int fab_groups;
+    int fab_groups, fab_kv;
     float *hb;
     float *finb;
     int32_t *sqkv, *soi, *sgu, *sd;
@@ -1232,6 +1232,7 @@ static struct run R;
 #define ATT_MAXG 16
 
 static int ATT_W = ATT_TB;
+static int ATT_LO;
 
 #define ATT_INLINE static inline __attribute__((always_inline))
 
@@ -1679,6 +1680,8 @@ static int attn_fabric(void)
     return 0;
 }
 
+static void attn_worker(void *arg, int id, int nt);
+
 static uint32_t ATT_QF[4][FAB_NQ];
 static int32_t ATT_TOP[4][FAB_NQ];
 static uint64_t ATT_SUM[4][FAB_NQ];
@@ -1748,6 +1751,7 @@ static int attn_fabric_groups(void)
                 mm2s_start(i, B0.phys + FAB_BASE_OFF + (uint64_t)R.cur_seq * R.fab_seq + base,
                            (size_t)T * FAB_BLOCK);
             }
+            if (!pass && M.n_kv > R.fab_kv) parallel_for(attn_worker, 0);
             for (i = 0; i < (unsigned)nc; i++)
                 if (wait_ioc(i, MM2S_DMASR, "attention cache")) return -1;
             for (i = 0; i < (unsigned)nc; i++)
@@ -1795,7 +1799,8 @@ static void attn_worker(void *arg, int id, int nt)
     (void)arg;
     const int hd = M.head_dim, T = R.cur_T, groups = M.groups, W = ATT_W;
     const float scaling = 1.0f / sqrtf((float)hd);
-    const int lo = M.n_q * id / nt, hi = M.n_q * (id + 1) / nt;
+    const int base = ATT_LO, span = M.n_q - base;
+    const int lo = base + span * id / nt, hi = base + span * (id + 1) / nt;
     float *scb = R.scores + (size_t)id * groups * R.ctx;
     for (int hq = lo; hq < hi;) {
         const int g = hq / groups;
@@ -2399,7 +2404,7 @@ static void qkv_post_worker(void *arg, int id, int nt)
             for (int d = 0; d < hd; d++) { kg[d] = bf16_dec(bf16_enc(kg[d])); vg[d] = bf16_dec(bf16_enc(vg[d])); }
             for (int d = 0; d < hd; d++) R.cache_kb[vbase + d] = bf16_enc(kg[d]);
             for (int d = 0; d < hd; d++) R.cache_vb[vbase + d] = bf16_enc(vg[d]);
-        } else if (R.cache_dtype == CACHE_FAB) {
+        } else if (R.cache_dtype == CACHE_FAB && g < R.fab_kv) {
             const int c = g / FAB_KV, s = g % FAB_KV;
             const size_t blk = FAB_BASE_OFF + (size_t)j->seq * R.fab_seq
                              + (((size_t)l * (size_t)R.fab_groups + (size_t)c) * (size_t)R.ctx
@@ -2570,6 +2575,7 @@ static int forward_slots(const int *tok, int nb, int nlayers)
             R.cur_seq = R.slot_seq[b];
             if (R.cache_dtype == CACHE_FAB) {
                 if (R.fab_groups > 1 ? attn_fabric_groups() : attn_fabric()) { print_dma_status(); return 3; }
+                if (M.n_kv > R.fab_kv && R.fab_groups == 1) parallel_for(attn_worker, 0);
             } else {
                 parallel_for(attn_worker, 0);
             }
@@ -3071,6 +3077,8 @@ static void alloc_run(int ctx, int cache_dtype)
     const int H = M.hidden, I = M.inter;
     R.ctx = ctx;
     R.cache_dtype = cache_dtype;
+    ATT_LO = 0;
+    R.fab_kv = 0;
     R.k_i8 = cache_dtype == CACHE_I8 || cache_dtype == CACHE_K8;
     R.v_i8 = cache_dtype == CACHE_I8 || cache_dtype == CACHE_V8;
     ATT_W = M.groups == 1 ? 16 : ATT_TB;
@@ -3100,6 +3108,10 @@ static void alloc_run(int ctx, int cache_dtype)
         }
         fx_tables();
         R.fab_groups = (M.n_kv + FAB_KV - 1) / FAB_KV;
+        if ((unsigned)R.fab_groups > ATT_PORTS) R.fab_groups = (int)ATT_PORTS;
+        R.fab_kv = R.fab_groups * FAB_KV;
+        if (R.fab_kv > M.n_kv) R.fab_kv = M.n_kv;
+        ATT_LO = R.fab_kv * M.groups;
         FAB_BASE_OFF = (M.model_bytes + 0xFFFFFu) & ~(size_t)0xFFFFFu;
         R.fab_seq = (size_t)M.layers * (size_t)R.fab_groups * (size_t)ctx * FAB_BLOCK;
         const size_t need = FAB_BASE_OFF + (size_t)(R.nseq < 1 ? 1 : R.nseq) * R.fab_seq;
@@ -3108,6 +3120,13 @@ static void alloc_run(int ctx, int cache_dtype)
                             "fewer with --gen-batch or a smaller --context\n",
                     R.nseq < 1 ? 1 : R.nseq, R.nseq == 1 ? "" : "s", ctx, need, B0.dev, B0.size);
             exit(2);
+        }
+        if (M.n_kv > R.fab_kv) {
+            R.k_i8 = R.v_i8 = 1;
+            R.cache_k8 = xmalloc(cells);
+            R.cache_v8 = xmalloc(cells);
+            R.cache_ks = xmalloc(sizeof(float) * (size_t)M.layers * M.n_kv * ctx);
+            R.cache_vs = xmalloc(sizeof(float) * (size_t)M.layers * M.n_kv * ctx);
         }
     } else if (cache_dtype == CACHE_I8 || cache_dtype == CACHE_FX
                || cache_dtype == CACHE_K8 || cache_dtype == CACHE_V8) {
