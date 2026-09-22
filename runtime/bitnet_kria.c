@@ -36,6 +36,7 @@
 #define OFF_ACT 0x000000u
 #define OFF_QKV 0x008000u
 #define OFF_OI 0x018000u
+#define HEAD_ROW_PAD (E * 8u)
 #define OFF_GU 0x023000u
 #define OFF_H 0x059000u
 #define OFF_Q8 0x074000u
@@ -988,7 +989,7 @@ struct model {
     const int8_t *head_w;
     const float *head_scale;
     const float *head_t_scale;
-    unsigned head_t_beats, head_t_npe;
+    unsigned head_t_beats, head_t_npe, head_rows;
     size_t model_bytes, head_t_bytes;
     unsigned wpb, wpby;
     int silu;
@@ -1877,7 +1878,8 @@ static void topk_chunk_worker(void *arg, int id, int nt)
         const unsigned base = e * npe + j->c * cr;
         const unsigned lo = base + (unsigned)((uint64_t)cr * (unsigned)id / (unsigned)nt);
         const unsigned hi = base + (unsigned)((uint64_t)cr * (unsigned)(id + 1) / (unsigned)nt);
-        for (unsigned i = lo; i < hi; i++)
+        const unsigned end = hi < (unsigned)M.vocab ? hi : (unsigned)M.vocab;
+        for (unsigned i = lo; i < end; i++)
             heap_push(v, r, &n, k, (float)j->sum[i] * j->scale[i], (int)i);
     }
     j->n[id] = n;
@@ -3353,13 +3355,15 @@ int main(int argc, char **argv)
 
     if (R.head_fabric) {
         open_udmabuf(&B2, buf2);
-        M.head_t_scale = map_ro(dir, "head_t_scale.bin", (size_t)M.vocab * 4, 0);
+        M.head_rows = (((unsigned)M.vocab + HEAD_ROW_PAD - 1u) / HEAD_ROW_PAD) * HEAD_ROW_PAD;
+        M.head_t_scale = map_ro(dir, "head_t_scale.bin", (size_t)M.head_rows * 4, 0);
         M.head_t_beats = ((unsigned)M.hidden + M.wpb - 1u) / M.wpb;
-        M.head_t_npe = (unsigned)M.vocab / E;
-        M.head_t_bytes = (size_t)M.vocab * M.head_t_beats * BEAT_BYTES;
+        M.head_t_npe = M.head_rows / E;
+        M.head_t_bytes = (size_t)M.head_rows * M.head_t_beats * BEAT_BYTES;
         snprintf(M.head_file, sizeof M.head_file, "head3_t.bin");
-        if (M.vocab % (int)E) {
-            fprintf(stderr, "bitnet_kria: vocab %d does not split over %u engines\n", M.vocab, E);
+        if (M.head_t_npe % R.head_chunks) {
+            fprintf(stderr, "bitnet_kria: %u neurons an engine do not split into %u chunks;"
+                            " --head-chunks must divide it\n", M.head_t_npe, R.head_chunks);
             return 2;
         }
         if (M.head_t_npe > 0xFFFFu || M.head_t_beats > 0x7Fu) {
@@ -3367,9 +3371,9 @@ int main(int argc, char **argv)
                     M.head_t_npe, M.head_t_beats);
             return 2;
         }
-        if (OFF_HEADSUM + (size_t)M.vocab * 4 > B1.size) {
+        if (OFF_HEADSUM + (size_t)M.head_rows * 4 > B1.size) {
             fprintf(stderr, "bitnet_kria: %s is %zu bytes, the head sums need %zu\n",
-                    B1.dev, B1.size, OFF_HEADSUM + (size_t)M.vocab * 4);
+                    B1.dev, B1.size, OFF_HEADSUM + (size_t)M.head_rows * 4);
             return 2;
         }
         R.hts = M.head_t_scale;
