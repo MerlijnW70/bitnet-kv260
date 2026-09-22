@@ -1226,15 +1226,17 @@ static struct run R;
 #define ATT_TB 32
 #define ATT_MAXG 16
 
+static int ATT_W = ATT_TB;
+
 #define ATT_INLINE static inline __attribute__((always_inline))
 
-ATT_INLINE void scores_kt16_h(float *sc, const float *kt, const float *q, const int hd, float scaling)
+ATT_INLINE void scores_kt16_h(float *sc, const float *kt, const float *q, const int hd, float scaling, const int w)
 {
 #ifdef __aarch64__
     float32x4_t a0 = vdupq_n_f32(0), a1 = vdupq_n_f32(0), a2 = vdupq_n_f32(0), a3 = vdupq_n_f32(0);
     for (int d = 0; d < hd; d++) {
         const float32x4_t qd = vdupq_n_f32(q[d]);
-        const float *k = kt + (size_t)d * ATT_TB;
+        const float *k = kt + (size_t)d * (size_t)w;
         a0 = vaddq_f32(a0, vmulq_f32(vld1q_f32(k), qd));
         a1 = vaddq_f32(a1, vmulq_f32(vld1q_f32(k + 4), qd));
         a2 = vaddq_f32(a2, vmulq_f32(vld1q_f32(k + 8), qd));
@@ -1248,25 +1250,30 @@ ATT_INLINE void scores_kt16_h(float *sc, const float *kt, const float *q, const 
 #else
     for (int j = 0; j < 16; j++) {
         float s = 0;
-        for (int d = 0; d < hd; d++) s += kt[(size_t)d * ATT_TB + j] * q[d];
+        for (int d = 0; d < hd; d++) s += kt[(size_t)d * (size_t)w + j] * q[d];
         sc[j] = s * scaling;
     }
 #endif
 }
 
-static void scores_kt16(float *sc, const float *kt, const float *q, int hd, float scaling)
+static void scores_kt16(float *sc, const float *kt, const float *q, int hd, float scaling, const int w)
 {
-    if (hd == 128) scores_kt16_h(sc, kt, q, 128, scaling);
-    else scores_kt16_h(sc, kt, q, hd, scaling);
+    if (w == 16) {
+        if (hd == 128) scores_kt16_h(sc, kt, q, 128, scaling, 16);
+        else scores_kt16_h(sc, kt, q, hd, scaling, 16);
+    } else {
+        if (hd == 128) scores_kt16_h(sc, kt, q, 128, scaling, 32);
+        else scores_kt16_h(sc, kt, q, hd, scaling, 32);
+    }
 }
 
-static void scores_kt8(float *sc, const float *kt, const float *q, int hd, float scaling)
+static void scores_kt8(float *sc, const float *kt, const float *q, int hd, float scaling, const int w)
 {
 #ifdef __aarch64__
     float32x4_t a0 = vdupq_n_f32(0), a1 = vdupq_n_f32(0);
     for (int d = 0; d < hd; d++) {
         const float32x4_t qd = vdupq_n_f32(q[d]);
-        const float *k = kt + (size_t)d * ATT_TB;
+        const float *k = kt + (size_t)d * (size_t)w;
         a0 = vaddq_f32(a0, vmulq_f32(vld1q_f32(k), qd));
         a1 = vaddq_f32(a1, vmulq_f32(vld1q_f32(k + 4), qd));
     }
@@ -1276,23 +1283,23 @@ static void scores_kt8(float *sc, const float *kt, const float *q, int hd, float
 #else
     for (int j = 0; j < 8; j++) {
         float s = 0;
-        for (int d = 0; d < hd; d++) s += kt[(size_t)d * ATT_TB + j] * q[d];
+        for (int d = 0; d < hd; d++) s += kt[(size_t)d * (size_t)w + j] * q[d];
         sc[j] = s * scaling;
     }
 #endif
 }
 
-static void scores_kt4(float *sc, const float *kt, const float *q, int hd, float scaling)
+static void scores_kt4(float *sc, const float *kt, const float *q, int hd, float scaling, const int w)
 {
 #ifdef __aarch64__
     float32x4_t a0 = vdupq_n_f32(0);
     for (int d = 0; d < hd; d++)
-        a0 = vaddq_f32(a0, vmulq_f32(vld1q_f32(kt + (size_t)d * ATT_TB), vdupq_n_f32(q[d])));
+        a0 = vaddq_f32(a0, vmulq_f32(vld1q_f32(kt + (size_t)d * (size_t)w), vdupq_n_f32(q[d])));
     vst1q_f32(sc, vmulq_f32(a0, vdupq_n_f32(scaling)));
 #else
     for (int j = 0; j < 4; j++) {
         float s = 0;
-        for (int d = 0; d < hd; d++) s += kt[(size_t)d * ATT_TB + j] * q[d];
+        for (int d = 0; d < hd; d++) s += kt[(size_t)d * (size_t)w + j] * q[d];
         sc[j] = s * scaling;
     }
 #endif
@@ -1333,10 +1340,10 @@ ATT_INLINE void scores_kt16x4_h(float *s0, float *s1, float *s2, float *s3, cons
     vst1q_f32(s3, vmulq_f32(b30, sv)); vst1q_f32(s3 + 4, vmulq_f32(b31, sv));
     vst1q_f32(s3 + 8, vmulq_f32(b32, sv)); vst1q_f32(s3 + 12, vmulq_f32(b33, sv));
 #else
-    scores_kt16_h(s0, kt, q0, hd, scaling);
-    scores_kt16_h(s1, kt, q1, hd, scaling);
-    scores_kt16_h(s2, kt, q2, hd, scaling);
-    scores_kt16_h(s3, kt, q3, hd, scaling);
+    scores_kt16_h(s0, kt, q0, hd, scaling, ATT_TB);
+    scores_kt16_h(s1, kt, q1, hd, scaling, ATT_TB);
+    scores_kt16_h(s2, kt, q2, hd, scaling, ATT_TB);
+    scores_kt16_h(s3, kt, q3, hd, scaling, ATT_TB);
 #endif
 }
 
@@ -1370,8 +1377,8 @@ ATT_INLINE void scores_kt16x2_h(float *s0, float *s1, const float *kt,
     vst1q_f32(s1, vmulq_f32(b10, sv)); vst1q_f32(s1 + 4, vmulq_f32(b11, sv));
     vst1q_f32(s1 + 8, vmulq_f32(b12, sv)); vst1q_f32(s1 + 12, vmulq_f32(b13, sv));
 #else
-    scores_kt16_h(s0, kt, q0, hd, scaling);
-    scores_kt16_h(s1, kt, q1, hd, scaling);
+    scores_kt16_h(s0, kt, q0, hd, scaling, ATT_TB);
+    scores_kt16_h(s1, kt, q1, hd, scaling, ATT_TB);
 #endif
 }
 
@@ -1383,14 +1390,14 @@ static void scores_kt16x2(float *s0, float *s1, const float *kt,
 }
 
 static void scores_kt_tail(float *sc, const float *kt, const float *q, int from, int T,
-                           int hd, float scaling)
+                           int hd, float scaling, const int w)
 {
     int t = from;
-    for (; t + 8 <= T; t += 8) scores_kt8(sc + t, kt + t, q, hd, scaling);
-    for (; t + 4 <= T; t += 4) scores_kt4(sc + t, kt + t, q, hd, scaling);
+    for (; t + 8 <= T; t += 8) scores_kt8(sc + t, kt + t, q, hd, scaling, w);
+    for (; t + 4 <= T; t += 4) scores_kt4(sc + t, kt + t, q, hd, scaling, w);
     for (; t < T; t++) {
         float s = 0;
-        for (int d = 0; d < hd; d++) s += kt[(size_t)d * ATT_TB + t] * q[d];
+        for (int d = 0; d < hd; d++) s += kt[(size_t)d * (size_t)w + t] * q[d];
         sc[t] = s * scaling;
     }
 }
@@ -1670,7 +1677,7 @@ static int attn_fabric(void)
 static void attn_worker(void *arg, int id, int nt)
 {
     (void)arg;
-    const int hd = M.head_dim, T = R.cur_T, groups = M.groups;
+    const int hd = M.head_dim, T = R.cur_T, groups = M.groups, W = ATT_W;
     const float scaling = 1.0f / sqrtf((float)hd);
     const int lo = M.n_q * id / nt, hi = M.n_q * (id + 1) / nt;
     float *scb = R.scores + (size_t)id * groups * R.ctx;
@@ -1700,8 +1707,8 @@ static void attn_worker(void *arg, int id, int nt)
             hq = end;
             continue;
         }
-        for (int tb = 0; tb < T; tb += ATT_TB) {
-            const int tn = tb + ATT_TB < T ? ATT_TB : T - tb;
+        for (int tb = 0; tb < T; tb += W) {
+            const int tn = tb + W < T ? W : T - tb;
             if (R.k_i8) {
                 scores_i8_group(scp, mx, R.cache_k8 + vbase + (size_t)tb * hd, R.cache_ks + sbase + tb,
                                 qq, qs, nh, tb, tn, hd);
@@ -1713,7 +1720,7 @@ static void attn_worker(void *arg, int id, int nt)
                     if (m > mx[h]) mx[h] = m;
                 }
             } else {
-                const float *kt = R.cache_k + ktbase + (size_t)(tb / ATT_TB) * R.kt_tile;
+                const float *kt = R.cache_k + ktbase + (size_t)(tb / W) * R.kt_tile;
                 int t = 0;
                 for (; t + 16 <= tn; t += 16) {
                     int h = 0;
@@ -1729,11 +1736,11 @@ static void attn_worker(void *arg, int id, int nt)
                                       hd, scaling);
                     for (; h < nh; h++)
                         scores_kt16(scp[h] + tb + t, kt + t, R.cur_q + (size_t)(hq + h) * hd,
-                                    hd, scaling);
+                                    hd, scaling, W);
                 }
                 for (int h = 0; h < nh; h++)
                     scores_kt_tail(scp[h] + tb, kt, R.cur_q + (size_t)(hq + h) * hd, t, tn,
-                                   hd, scaling);
+                                   hd, scaling, W);
                 for (int h = 0; h < nh; h++)
                     for (int j = 0; j < tn; j++)
                         if (scp[h][tb + j] > mx[h]) mx[h] = scp[h][tb + j];
@@ -1747,8 +1754,8 @@ static void attn_worker(void *arg, int id, int nt)
             for (int t = 0; t < T; t++) sc[t] *= inv;
             for (int d = 0; d < hd; d++) outp[h][d] = 0;
         }
-        for (int tb = 0; tb < T; tb += ATT_TB) {
-            const int tn = tb + ATT_TB < T ? ATT_TB : T - tb;
+        for (int tb = 0; tb < T; tb += W) {
+            const int tn = tb + W < T ? W : T - tb;
             if (!R.v_i8 && R.cache_dtype != CACHE_BF16) {
                 const float *V = R.cache_v + vbase + (size_t)tb * hd;
                 for (int h = 0; h < nh; h++) accum_f32(outp[h], V, scp[h] + tb, tn, hd);
@@ -2304,7 +2311,7 @@ static void qkv_post_worker(void *arg, int id, int nt)
             if (R.k_i8) R.cache_ks[sbase] = 1.0f / absmax_int8(R.cache_k8 + vbase, kg, hd);
             else {
                 float *kt = R.cache_k + (size_t)l * R.kt_layer + (size_t)g * R.kt_head
-                            + (size_t)(pos / ATT_TB) * R.kt_tile + (size_t)(pos % ATT_TB);
+                            + (size_t)(pos / (unsigned)ATT_W) * R.kt_tile + (size_t)(pos % (unsigned)ATT_W);
                 for (int d = 0; d < hd; d++) kt[(size_t)d * R.ldk] = kg[d];
             }
             if (R.v_i8) R.cache_vs[sbase] = 1.0f / absmax_int8(R.cache_v8 + vbase, vg, hd);
@@ -2942,9 +2949,10 @@ static void alloc_run(int ctx, int cache_dtype)
     R.cache_dtype = cache_dtype;
     R.k_i8 = cache_dtype == CACHE_I8 || cache_dtype == CACHE_K8;
     R.v_i8 = cache_dtype == CACHE_I8 || cache_dtype == CACHE_V8;
-    const size_t tiles = ((size_t)ctx + ATT_TB - 1) / ATT_TB;
-    R.ldk = ATT_TB;
-    R.kt_tile = (size_t)M.head_dim * ATT_TB;
+    ATT_W = M.groups == 1 ? 16 : ATT_TB;
+    const size_t tiles = ((size_t)ctx + (size_t)ATT_W - 1) / (size_t)ATT_W;
+    R.ldk = (size_t)ATT_W;
+    R.kt_tile = (size_t)M.head_dim * (size_t)ATT_W;
     R.kt_head = tiles * R.kt_tile;
     R.kt_layer = R.kt_head * (size_t)M.n_kv;
     R.v_head = (size_t)ctx * (size_t)M.head_dim;
