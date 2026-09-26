@@ -35,18 +35,29 @@ read_pl0_ref() {
       | awk '{for (i = 2; i <= NF; i++) if ($i ~ /^[0-9]{8,}$/) { print $i; exit }}' | head -1
 }
 
+target_hz() {
+    sed -n 's/.*assigned-clock-rates[[:space:]]*=[[:space:]]*<\([0-9]*\)>.*/\1/p' "$HERE/firmware/$APP.dtso" 2>/dev/null | head -1
+}
+
 clock_check() {
     CLK=$(read_pl0_ref)
+    WANT=$(target_hz)
+    [ -n "$WANT" ] || { loud "no assigned-clock-rates in firmware/$APP.dtso, so there is nothing to check pl0_ref against."; return 1; }
+    MHZ=$((WANT / 1000000))
+    if [ -n "${CLK:-}" ] && [ "$CLK" != 99999999 ]; then
+        DIFF=$((CLK - WANT)); [ $DIFF -lt 0 ] && DIFF=$((-DIFF))
+        if [ $DIFF -le 1000 ]; then
+            ok "fabric clock" "pl0_ref $CLK Hz ($MHZ MHz, the rate firmware/$APP.dtso asks for)"
+            return 0
+        fi
+    fi
     case "${CLK:-}" in
-        249999998)
-            ok "fabric clock" "pl0_ref $CLK Hz (250 MHz)"
-            return 0;;
         99999999)
-            loud "pl0_ref reads 99999999 Hz. The fabric is running at 100 MHz, not 250 MHz." \
+            loud "pl0_ref reads 99999999 Hz. The fabric is running at 100 MHz, not $MHZ MHz." \
                  "" \
                  "The bitstream was programmed WITHOUT its device-tree overlay, so the PL clock" \
                  "was left at the boot firmware's rate. Every answer this board gives will still" \
-                 "be correct and every one will take 2.5 times as long. Nothing else on this" \
+                 "be correct and every one will take longer. Nothing else on this" \
                  "board reports an error, which is why this check is the first one here." \
                  "" \
                  "Load the bitstream and the overlay together, then run ./doctor.sh again:" \
@@ -62,8 +73,8 @@ clock_check() {
         "")
             loud "pl0_ref could not be read from /sys/kernel/debug/clk/clk_summary." \
                  "" \
-                 "Until it reads 249999998 there is no way to tell a 250 MHz fabric from a" \
-                 "100 MHz one, and a 100 MHz fabric gives right answers 2.5 times slower with" \
+                 "Until it can be read there is no way to tell a $MHZ MHz fabric from a" \
+                 "100 MHz one, and a 100 MHz fabric gives right answers more slowly with" \
                  "no error anywhere. debugfs is root-only, so run this where sudo works:" \
                  "" \
                  "    sudo grep pl0_ref /sys/kernel/debug/clk/clk_summary" \
@@ -72,12 +83,12 @@ clock_check() {
                  "Xilinx kernel and nothing else in this repository will work either."
             return 1;;
         *)
-            loud "pl0_ref reads $CLK Hz. It must read 249999998 (250 MHz)." \
+            loud "pl0_ref reads $CLK Hz. firmware/$APP.dtso asks for $WANT ($MHZ MHz)." \
                  "" \
-                 "This is neither the 250 MHz the design was timed at nor the 100 MHz of a" \
-                 "missing overlay, so something other than $APP is in the fabric, or the" \
-                 "overlay in firmware/ is not the one this bitstream was built with. Every" \
-                 "measurement in results/ was taken at 249999998 Hz." \
+                 "This is neither the $MHZ MHz the shipped design was timed at nor the 100 MHz" \
+                 "of a missing overlay, so something other than the $APP in firmware/ is in" \
+                 "the fabric (an older install loads silently by name), or its overlay is not" \
+                 "the one in firmware/." \
                  "" \
                  "Reload the bitstream WITH its overlay:" \
                  "" \
@@ -171,9 +182,9 @@ done
 BIT="$HERE/firmware/$APP.bit.bin"
 if [ -f "$BIT" ]; then
     M=$(md5sum "$BIT" | cut -d' ' -f1)
-    [ "$M" = 1f7e4fcc5ee4c905ebcfb57f60fe9675 ] \
-      && ok bitstream "md5 $M (the one every number in results/ was measured on)" \
-      || bad bitstream "md5 $M, expected 1f7e4fcc5ee4c905ebcfb57f60fe9675" "re-clone, or rebuild with hardware/build-ffn.tcl and expect different numbers"
+    [ "$M" = d1cd985109154fe1085d18d38bc5e478 ] \
+      && ok bitstream "md5 $M (four attention units at 200 MHz, the shipped one)" \
+      || bad bitstream "md5 $M, expected d1cd985109154fe1085d18d38bc5e478" "re-clone, or rebuild and expect different numbers"
     seen=0
     for L in /lib/firmware/$APP.bit.bin /lib/firmware/xilinx/$APP/$APP.bit.bin; do
         [ -f "$L" ] || continue

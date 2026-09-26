@@ -127,9 +127,13 @@ fabric() {
           | awk '{for (i = 2; i <= NF; i++) if ($i ~ /^[0-9]{8,}$/) { print $i; exit }}' | head -1)
     printf '   fpga0 state %s   pl0_ref %s Hz\n' "$st" "$clk"
     [ "$st" = operating ] || die "fpga0 is '$st', not 'operating'"
-    [ "$clk" = 249999998 ] || die "pl0_ref is $clk Hz, not 249999998. The overlay did not take, so the
-   fabric would run at 100 MHz: right answers, 2.5x slow, no error anywhere. Refusing to continue."
-    printf '   the fabric is at 250 MHz\n'
+    want=$(sed -n 's/.*assigned-clock-rates[[:space:]]*=[[:space:]]*<\([0-9]*\)>.*/\1/p' kv260-bitnet.dtso | head -1)
+    [ -n "$want" ] || die "no assigned-clock-rates in firmware/kv260-bitnet.dtso"
+    diff=$(( ${clk:-0} - want )); [ $diff -lt 0 ] && diff=$((-diff))
+    [ -n "$clk" ] && [ $diff -le 1000 ] || die "pl0_ref is ${clk:-unreadable} Hz, not the $want the overlay asks for. If it
+   reads 99999999 the overlay did not take, so the fabric runs at 100 MHz: right answers, slower,
+   no error anywhere. Refusing to continue."
+    printf '   the fabric is at %s MHz\n' "$((want / 1000000))"
 }
 
 weights() {

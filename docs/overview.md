@@ -116,7 +116,8 @@ worthless (6.52 tok/s, a 967 ms shift scan). The same process's second and third
 
 `doctor.sh` reports the **fabric clock** before anything else, because a fabric left at 100 MHz is
 the one failure that answers correctly and reports nothing. It reads `pl0_ref` from
-`/sys/kernel/debug/clk/clk_summary`, requires `249999998`, and on `99999999` prints a block naming
+`/sys/kernel/debug/clk/clk_summary`, requires the `assigned-clock-rates` of
+`firmware/kv260-bitnet.dtso` within 1 kHz (200 MHz for the shipped bitstream), and on `99999999` prints a block naming
 both fixes. `selftest.sh` runs `doctor.sh --clock` first and refuses to run any board test until it
 passes, so a 100 MHz fabric can never be mistaken for a slow board in a self-test result.
 
@@ -189,8 +190,9 @@ from commands recorded working.
 - `tools/prep.sh` against a local server — an empty directory, a full one, no address set, a
   corrupted file, a server handing back the wrong bytes, and a doctored manifest;
 - every shell script parses and every Python file compiles;
-- the bitstream's md5 is `1f7e4fcc5ee4c905ebcfb57f60fe9675`, the value recorded beside every
-  measurement in `results/`.
+- the bitstream's md5 was `1f7e4fcc5ee4c905ebcfb57f60fe9675`, the value recorded beside every
+  measurement in `results/` taken then; `firmware/` now ships the four-attention-unit bitstream,
+  md5 `d1cd985109154fe1085d18d38bc5e478` at 200 MHz (see `ENVIRONMENT.md`).
 
 **Assembled but not re-run on the board:** `setup.sh`, `doctor.sh`, `chat.sh` and `selftest.sh`
 themselves. The commands inside them are copied from ones recorded working on the reference board —

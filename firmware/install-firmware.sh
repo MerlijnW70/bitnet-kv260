@@ -25,12 +25,15 @@ verify() {
     printf 'fpga0 state  %s\n' "$st"
     printf 'pl0_ref      %s Hz\n' "${clk:-unreadable}"
     [ "$st" = operating ] || { echo "fpga0 is '$st', not 'operating': the bitstream is not in the fabric" >&2; return 1; }
+    want=$(sed -n 's/.*assigned-clock-rates[[:space:]]*=[[:space:]]*<\([0-9]*\)>.*/\1/p' "$HERE/$APP.dtso" | head -1)
+    [ -n "$want" ] || { echo "no assigned-clock-rates in $HERE/$APP.dtso" >&2; return 1; }
     case "${clk:-}" in
-        249999998) echo "the fabric is at 250 MHz"; return 0;;
-        99999999)  echo "the fabric is at 100 MHz: the overlay did not take, so every answer is right and 2.5x slow" >&2; return 1;;
+        99999999)  echo "the fabric is at 100 MHz: the overlay did not take, so every answer is right and slow" >&2; return 1;;
         "")        echo "could not read /sys/kernel/debug/clk/clk_summary" >&2; return 1;;
-        *)         echo "pl0_ref is $clk Hz, expected 249999998" >&2; return 1;;
     esac
+    diff=$((clk - want)); [ $diff -lt 0 ] && diff=$((-diff))
+    [ $diff -le 1000 ] || { echo "pl0_ref is $clk Hz, $APP.dtso asks for $want" >&2; return 1; }
+    echo "the fabric is at $((want / 1000000)) MHz"
 }
 
 case "${1:-}" in
@@ -78,8 +81,8 @@ next:
   sudo $SELF --verify
 
 --verify is this script checking the clock afterwards: fpga0 must read 'operating' and pl0_ref must
-read 249999998 Hz. At 99999999 Hz the overlay did not take and the fabric is running at 100 MHz,
-which gives right answers 2.5x slower with no error anywhere. ../doctor.sh refuses to pass on that
+read the assigned-clock-rates of $APP.dtso, within 1 kHz. At 99999999 Hz the overlay did not take
+and the fabric is running at 100 MHz, which gives right answers more slowly with no error anywhere. ../doctor.sh refuses to pass on that
 value too. If loading through xmutil misbehaves, ../setup.sh --fabric loads the same two files with
 fpgautil instead; see ../docs/troubleshooting.md.
 EOF

@@ -1,10 +1,14 @@
 # Rebuilding the bitstream — optional
 
 **You do not need to do this.** `firmware/kv260-bitnet.bit.bin` is in this repository (7,797,692 B,
-md5 `1f7e4fcc5ee4c905ebcfb57f60fe9675`), it is the file every number in `results/` was measured on,
-and the Kria Ubuntu image already carries everything needed to load it. Rebuilding costs a Vivado
-install — tens of gigabytes and a licence file — and about sixteen minutes of compute, and gets you
-the same design.
+md5 `d1cd985109154fe1085d18d38bc5e478`): a copy of `hardware/attn16c.bit.bin`, the engines plus four
+attention units at 200 MHz, built by `hardware/build-attn.tcl` (log `hardware/build-attn16c.log`,
+reports `hardware/attn16c-*.txt`). The Kria Ubuntu image already carries everything needed to load
+it. Rebuilding costs a Vivado install — tens of gigabytes and a licence file — and the compute.
+
+The rest of this page describes `build-ffn.tcl`, which built the earlier bitstream (md5
+`1f7e4fcc5ee4c905ebcfb57f60fe9675`, 250 MHz, about sixteen minutes) that the older files in
+`results/` were measured on.
 
 Do it if you want to change the design, verify it from source, or target a different part.
 

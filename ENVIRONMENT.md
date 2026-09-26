@@ -14,11 +14,12 @@ that when something behaves differently on yours you know where to look first.
 | kernel command line | includes `cma=1000M` (`CmaTotal 1024000 kB`) |
 | u-dma-buf | built from `github.com/ikwzm/udmabuf` against those headers; `udmabuf0=545259520 udmabuf1=8388608 udmabuf2=83886080` |
 | compiler | gcc 11.4.0 |
-| bitstream | `firmware/kv260-bitnet.bit.bin`, md5 `1f7e4fcc5ee4c905ebcfb57f60fe9675`, 7,797,692 B |
-| built with | AMD Vivado Design Suite 2026.1, on an Enterprise licence, in 15 min 57 s on a Ryzen 9 9950X |
-| timing | post-route, slow corner: WNS 0.108 ns, TNS 0.000, WHS 0.010, THS 0.000; 0 failing endpoints of 178,007 |
-| fabric | 42,271 CLB LUTs (36.09%), 53,342 registers (22.77%), 95 of 144 BRAM tiles, 40 of 64 URAM, 0 DSP |
-| PL clock | `pl0_ref` 249999998 Hz, set by the device-tree overlay, not by `fpgautil -b` alone |
+| bitstream | `firmware/kv260-bitnet.bit.bin` (= `hardware/attn16c.bit.bin`), four attention units, md5 `d1cd985109154fe1085d18d38bc5e478`, 7,797,692 B |
+| built with | AMD Vivado Design Suite 2026.1, on an Enterprise licence (`hardware/build-attn16c.log`) |
+| timing | post-route at 200 MHz: WNS 0.180 ns, TNS 0.000, WHS 0.010, THS 0.000; 0 failing endpoints of 345,889 (`hardware/attn16c-timing.txt`) |
+| fabric | 77,756 CLB LUTs (66.39%), 70,789 registers (30.22%), 95 of 144 BRAM tiles, 40 of 64 URAM, 168 DSP (`hardware/attn16c-utilization.txt`) |
+| PL clock | 200 MHz, the `assigned-clock-rates` of `firmware/kv260-bitnet.dtso`, set by the device-tree overlay, not by `fpgautil -b` alone |
+| earlier bitstream | md5 `1f7e4fcc5ee4c905ebcfb57f60fe9675`, 250 MHz (`pl0_ref` 249999998): the one the older files in `results/` were measured on |
 | storage | one microSD card that reads at 15-51 MB/s cold and 465-483 MB/s from the page cache |
 | model | `microsoft/bitnet-b1.58-2B-4T`, packed base 3: `model3.bin` md5 `dbb41a46744c176d31b0ce79bd82f166`, `head3_t.bin` md5 `97ba6c13749370a39adf42e821578e12`, `manifest.json` md5 `45cabaf7c91635df93069195d11202d0` |
 

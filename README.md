@@ -43,9 +43,9 @@ sudo firmware/install-firmware.sh --verify
 ```
 
 The first thing `doctor.sh` checks and reports is the **fabric clock**. It reads `pl0_ref` out of
-`/sys/kernel/debug/clk/clk_summary` and requires `249999998`. At `99999999` the fabric is running at
-100 MHz instead of 250, every answer is still correct, everything is 2.5 times slower and nothing
-else on the board reports an error — so `doctor.sh` fails loudly on it and `selftest.sh` refuses to
+`/sys/kernel/debug/clk/clk_summary` and requires the rate `firmware/kv260-bitnet.dtso` asks for
+(200 MHz for the shipped bitstream), within 1 kHz. At `99999999` the fabric is running at 100 MHz,
+every answer is still correct, everything is slower and nothing else on the board reports an error — so `doctor.sh` fails loudly on it and `selftest.sh` refuses to
 run the board tests at all until it passes.
 
 The forty alarms:

@@ -9,10 +9,10 @@ nothing, so it is always safe to run.
 
 **The fabric is at 100 MHz.** `fpgautil -b kv260-bitnet.bit.bin` *without* `-o kv260-bitnet.dtbo`
 programs the fabric and leaves `pl0_ref` at the boot firmware's 99999999 Hz. The design still works
-and every answer is still right; it is 2.5× slower and there is no error message anywhere.
+and every answer is still right; it is slower and there is no error message anywhere.
 
 ```sh
-sudo grep ' pl0_ref ' /sys/kernel/debug/clk/clk_summary    # must read 249999998
+sudo grep ' pl0_ref ' /sys/kernel/debug/clk/clk_summary    # must read the assigned-clock-rates of firmware/kv260-bitnet.dtso (200 MHz)
 sudo ./setup.sh --fabric                                   # reload with the overlay, refuse on 99999999
 ```
 
@@ -235,7 +235,7 @@ every Kria app needs, `kv260-bitnet.bit.bin`, `kv260-bitnet.dtbo` and `shell.jso
 sudo firmware/install-firmware.sh
 sudo xmutil unloadapp
 sudo xmutil loadapp kv260-bitnet
-sudo firmware/install-firmware.sh --verify      # fpga0 operating, pl0_ref 249999998
+sudo firmware/install-firmware.sh --verify      # fpga0 operating, pl0_ref at the .dtso's rate
 sudo firmware/install-firmware.sh --remove      # unload it and delete the app directory
 ```
 

@@ -14,7 +14,8 @@ selftest.sh -- prove this board is running what this repository measured.
   ./selftest.sh --rtl-only   the testbenches alone, on any machine with iverilog
   ./selftest.sh --quick      skip the stage check (it needs refdump/, see docs/weights.md)
 
-The board tests refuse to start until doctor.sh --clock says the fabric is at 250 MHz.
+The board tests refuse to start until doctor.sh --clock says the fabric is at the rate
+firmware/kv260-bitnet.dtso asks for.
 docs/overview.md says what each step checks and how much of it has been run.
 EOF
 }
@@ -54,8 +55,8 @@ if ! "$HERE/doctor.sh" --clock; then
 
 selftest.sh will not run the board tests while the fabric clock is wrong.
 
-At 99999999 Hz every answer below would still be correct and every rate would be about 2.5 times
-too low, so the run would look like a slow board rather than an unloaded overlay. Fix the clock
+At 99999999 Hz every answer below would still be correct and every rate would be too low, so the
+run would look like a slow board rather than an unloaded overlay. Fix the clock
 first with the command doctor.sh named above, then run ./selftest.sh again.
 
   ./selftest.sh --rtl-only   still works: the Icarus Verilog testbenches need no board at all.
