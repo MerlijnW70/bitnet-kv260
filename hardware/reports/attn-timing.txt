@@ -2,8 +2,8 @@ Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2026 Advanc
 --------------------------------------------------------------------------------------------------------------------------------------------------
 | Tool Version      : Vivado v.2026.1 (win64) Build 6511674 Tue Jun 16 11:02:23 MDT 2026
 | Date              : Fri Sep 18 07:45:16 2026
-| Host              : 4080PC running 64-bit major release  (build 9200)
-| Command           : report_timing_summary -max_paths 3 -file F:/oracle/board/attn/attn12-timing.txt
+| Host              : (build machine) running 64-bit major release  (build 9200)
+| Command           : report_timing_summary -max_paths 3 -file hardware/reports/attn-timing.txt
 | Design            : design_1_wrapper
 | Device            : xck26-sfvc784
 | Speed File        : -2LV  PRODUCTION 1.31 12-08-2025
