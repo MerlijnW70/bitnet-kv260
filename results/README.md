@@ -45,6 +45,9 @@ recorded as *"the fixed runtime"*.
 | `pv2-cpp.txt` | the same measurement on bitnet.cpp, segmented by llama.cpp's own milliseconds |
 | `b3v2-rss.txt` | `/usr/bin/time -v` over a generation run |
 | `b3v2-ids-fabric.json` | the generated token ids for all 31 battery and bench prompts. `selftest/expected_ids.json` is a six-prompt subset of exactly these, after checking they agree with three other recorded runs |
+| `probe-2026-09-26.txt` | each engine's finish time and rate per phase and batch size, generation and prompt apart, including the head timed burst by burst; the earlier 250 MHz bitstream (md5 `1f7e4fcc…`). Not copied from the research repository: measured on the board directly |
+| `sweep-2026-09-26.txt` | 512 placements of the four engines' start addresses modulo 64 KiB for an o_proj-sized burst, the absolute-shift control, and six interleaved end-to-end runs of stock, stock with one chunk, and rows placed from that table |
+| `engine-placement-2026-09-26/` | the patches those two files were made with, applied to the board's runtime source: `split_patch.py` (probe and per-engine rows), `plan_patch.py` (rows from the sweep table; reads `sweep.txt`), `sweep_patch.py` (`ENGINE_SWEEP=1`), `pin_patch.py` (`ENGINE_PIN=1`, measured no better), `trace_an.py` (the scheduler-trace analysis) |
 | `kria.txt` | the earliest pass: bitnet.cpp brought up on the board's own CPUs, which is where the baseline's flags come from |
 | `kria-model-results.txt` | the first whole-model pass on the fabric, and the source of the weighting the analysis tools use |
 | `kria-speed-results.txt` | the speed pass before base 3, including the fabric's own reference-vector runs and the `polkitd` diagnosis |

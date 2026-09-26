@@ -137,8 +137,9 @@ because the multiplies are small and serial, not because these multipliers beat 
 The tied head is 128,256 × 2560 — bigger than any layer. Two stages:
 
 1. **In the fabric**: the head quantised to trits by an absolute-mean rule, streamed through the same
-   four engines (65,667,072 bytes, one long sequential read, measured at 15.93-16.01 GB/s — the
-   engines' full beat rate), giving an approximate score for every one of the 128,256 rows. Take the
+   four engines (65,667,072 bytes, one long sequential read, about 13.4 GB/s timed burst by burst;
+   the runtime's own 15.93-16.01 GB/s leaves out the top-256 work that overlaps the stream), giving
+   an approximate score for every one of the 128,256 rows. Take the
    top 256.
 2. **On the A53s**: rescore those 256 exactly against the int8 head and take the argmax.
 
@@ -183,10 +184,10 @@ All three must land below 4 GiB, because the engines carry a 40-bit address but 
 
 ## Where it could go faster
 
-See [measurements.md](measurements.md). The short version: the model stream runs at 12.73 GB/s
-against the head stream's 16.0, not because the memory cannot keep up — it demonstrably can, in the
-same token — and not because of the 120 short runs a token, whose setup, polls and drains come to
-about 1.8 ms. Inside the weight bursts, the engines on HP1 and HP2 finish 9-33% after the other two
-in every phase.
+See [measurements.md](measurements.md). The short version: the model stream runs at 12.73 GB/s and
+the head stream, timed burst by burst, at about 13.4 — not because of the 120 short runs a token,
+whose setup, polls and drains come to about 1.8 ms. Inside the weight bursts, the engines on HP1 and
+HP2, which share one DDR controller port, finish 9-33% after the other two, and how far behind they
+fall is set by where the four engines' start addresses sit modulo 64 KiB.
 The floor under everything, with every ARM millisecond hidden and every byte at the beat rate, is
 30.2 ms a token: **33 tokens a second**.

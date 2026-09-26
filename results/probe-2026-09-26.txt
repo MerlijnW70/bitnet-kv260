@@ -1,0 +1,53 @@
+=== engine probe, 2026-09-26, bitstream md5 1f7e4fcc5ee4c905ebcfb57f60fe9675, pl0_ref 249999998
+=== runtime built from ~/bitnet-kria/bitnet_kria.c (md5 c66037043d72e887c598b3bfc4756265) with a probe patch: ENGINE_PROBE=1 polls each engine's done count after the weight arm, prewake off
+=== command: ENGINE_PROBE=1 bitnet_kria_probe --max-new 128 --context 512 --threads 4 --head fabric --timing --quiet < bench-battery-q23_long.txt
+done 128 10075.8
+prompt 53 tokens 1863.5 ms (28.44 tok/s), generated 128 8212.4 ms (15.59 tok/s)
+engine probe (prewake off; a burst is 'missed' when an engine had finished before the first poll)
+  qkv      batch 4 clean 390 missed 0, 491520 B an engine a burst, all four done at 249.1 us = 7.89 GB/s together
+    engine 0  done at    248.0 us    1.98 GB/s   99.9% of its neurons done when the first engine finished
+    engine 1  done at    248.4 us    1.98 GB/s   99.9% of its neurons done when the first engine finished
+    engine 2  done at    248.6 us    1.98 GB/s   99.7% of its neurons done when the first engine finished
+    engine 3  done at    248.7 us    1.98 GB/s   99.6% of its neurons done when the first engine finished
+  o_proj   batch 4 clean 390 missed 0, 327680 B an engine a burst, all four done at 166.3 us = 7.88 GB/s together
+    engine 0  done at    165.0 us    1.99 GB/s  100.0% of its neurons done when the first engine finished
+    engine 1  done at    165.4 us    1.98 GB/s   99.9% of its neurons done when the first engine finished
+    engine 2  done at    166.0 us    1.97 GB/s   99.6% of its neurons done when the first engine finished
+    engine 3  done at    166.2 us    1.97 GB/s   99.4% of its neurons done when the first engine finished
+  gate+up  batch 4 clean 390 missed 0, 1769472 B an engine a burst, all four done at 895.8 us = 7.90 GB/s together
+    engine 0  done at    894.1 us    1.98 GB/s  100.0% of its neurons done when the first engine finished
+    engine 1  done at    894.8 us    1.98 GB/s   99.9% of its neurons done when the first engine finished
+    engine 2  done at    895.4 us    1.98 GB/s   99.9% of its neurons done when the first engine finished
+    engine 3  done at    895.3 us    1.98 GB/s   99.9% of its neurons done when the first engine finished
+  down     batch 4 clean 390 missed 0, 890880 B an engine a burst, all four done at 447.8 us = 7.96 GB/s together
+    engine 0  done at    446.7 us    1.99 GB/s  100.0% of its neurons done when the first engine finished
+    engine 1  done at    447.1 us    1.99 GB/s   99.9% of its neurons done when the first engine finished
+    engine 2  done at    447.1 us    1.99 GB/s   99.9% of its neurons done when the first engine finished
+    engine 3  done at    447.4 us    1.99 GB/s   99.8% of its neurons done when the first engine finished
+  qkv      batch 1 clean 3870 missed 0, 491520 B an engine a burst, all four done at 136.4 us = 14.42 GB/s together
+    engine 0  done at    124.7 us    3.94 GB/s   99.9% of its neurons done when the first engine finished
+    engine 1  done at    136.0 us    3.61 GB/s   91.2% of its neurons done when the first engine finished
+    engine 2  done at    136.2 us    3.61 GB/s   91.0% of its neurons done when the first engine finished
+    engine 3  done at    125.8 us    3.91 GB/s   99.3% of its neurons done when the first engine finished
+  o_proj   batch 1 clean 3870 missed 0, 327680 B an engine a burst, all four done at 111.5 us = 11.76 GB/s together
+    engine 0  done at     86.2 us    3.80 GB/s   99.8% of its neurons done when the first engine finished
+    engine 1  done at    111.1 us    2.95 GB/s   70.7% of its neurons done when the first engine finished
+    engine 2  done at    111.4 us    2.94 GB/s   70.3% of its neurons done when the first engine finished
+    engine 3  done at     87.2 us    3.76 GB/s   98.8% of its neurons done when the first engine finished
+  gate+up  batch 1 clean 7737 missed 3, 884736 B an engine a burst, all four done at 301.8 us = 11.73 GB/s together
+    engine 0  done at    238.7 us    3.71 GB/s   99.9% of its neurons done when the first engine finished
+    engine 1  done at    301.4 us    2.94 GB/s   72.6% of its neurons done when the first engine finished
+    engine 2  done at    301.7 us    2.93 GB/s   72.4% of its neurons done when the first engine finished
+    engine 3  done at    239.8 us    3.69 GB/s   99.5% of its neurons done when the first engine finished
+  down     batch 1 clean 3870 missed 0, 890880 B an engine a burst, all four done at 249.1 us = 14.31 GB/s together
+    engine 0  done at    227.0 us    3.92 GB/s  100.0% of its neurons done when the first engine finished
+    engine 1  done at    248.7 us    3.58 GB/s   90.4% of its neurons done when the first engine finished
+    engine 2  done at    249.0 us    3.58 GB/s   90.3% of its neurons done when the first engine finished
+    engine 3  done at    227.7 us    3.91 GB/s   99.7% of its neurons done when the first engine finished
+  head     batch 1 clean 1031 missed 1, 2052096 B an engine a burst, all four done at 610.7 us = 13.44 GB/s together
+    engine 0  done at    531.2 us    3.86 GB/s  100.0% of its neurons done when the first engine finished
+    engine 1  done at    610.4 us    3.36 GB/s   84.8% of its neurons done when the first engine finished
+    engine 2  done at    610.7 us    3.36 GB/s   84.7% of its neurons done when the first engine finished
+    engine 3  done at    532.5 us    3.85 GB/s   99.8% of its neurons done when the first engine finished
+per forward over 181 (ms): engines qkv 3.622, o 2.916, gate+up 13.876, down 6.466 (26.879 together); activation loads 0.733; glue A 3.437 B 3.417; shift scan 3.366; sums out 1.023; attention 7.491; norms, quant, RoPE and residuals 3.804; waiting on the side thread 0.011; forward total 51.744. side thread busy 3.313 ms a forward (beats and the FFN scale, off the critical path). head 5.416 ms a call over 129 calls
+head stages (ms a call over 129 calls): stage 1 ternary stream 3.998, its activation load 0.007, sync and top-256 1.202, stage 2 exact rescore 0.198, head total 5.416

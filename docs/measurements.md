@@ -5,25 +5,25 @@ out of and the command that produced it. All of it is one KV260 — see [../ENVI
 
 Reproduce any of it with `../selftest.sh`, or with the command in the right-hand column.
 
-## Context 1024, 0.73B (bitnet_b1_58-large), 900 generated tokens
-
-Shipped bitstream: 4 attention units, 200 MHz. `--context 1024 --attn-ports 4`.
-
-| attention | tok/s | W | tok/J | top-1 vs numpy |
-|---|---|---|---|---|
-| `--cache-dtype i8` | 30.48 | 5.899 | 5.17 | 209/210 |
-| `ATTN_SHAPE=16x96 --cache-dtype fab` | **34.98** | 6.424 | **5.44** | **210/210** |
-
-Four sequences at once, 200 tokens each, `--gen-batch 4 --cache-dtype fab`:
-**55.54 tok/s aggregate, 5.429 W, 9.75 tok/J**.
-
-Context 512, 256 tokens: `i8` 44.21 tok/s against `fab` 41.46. Short context: use `i8`.
-
-2B4T on this bitstream: byte-identical to the 250 MHz one, 2212 ids over the arm head, the
-fabric head, `--prompt-batch 4` and `--cache-dtype i8`; 16.49 against 16.37 tok/s.
-
-
-## Speed
+## Context 1024, 0.73B (bitnet_b1_58-large), 900 generated tokens
+
+Shipped bitstream: 4 attention units, 200 MHz. `--context 1024 --attn-ports 4`.
+
+| attention | tok/s | W | tok/J | top-1 vs numpy |
+|---|---|---|---|---|
+| `--cache-dtype i8` | 30.48 | 5.899 | 5.17 | 209/210 |
+| `ATTN_SHAPE=16x96 --cache-dtype fab` | **34.98** | 6.424 | **5.44** | **210/210** |
+
+Four sequences at once, 200 tokens each, `--gen-batch 4 --cache-dtype fab`:
+**55.54 tok/s aggregate, 5.429 W, 9.75 tok/J**.
+
+Context 512, 256 tokens: `i8` 44.21 tok/s against `fab` 41.46. Short context: use `i8`.
+
+2B4T on this bitstream: byte-identical to the 250 MHz one, 2212 ids over the arm head, the
+fabric head, `--prompt-batch 4` and `--cache-dtype i8`; 16.49 against 16.37 tok/s.
+
+
+## Speed
 
 Five bench prompts, three repeats each, 267 prompt and 876 generated tokens, context 512, one
 long-lived process; `results/kria-speed2-results.txt`.
@@ -78,16 +78,30 @@ Four engines take one 16-byte beat a clock each at 250 MHz: 16.0 GB/s if the mem
 | | measured |
 |---|---|
 | the model stream | 417,546,240 B in 32.799 ms = **12.73 GB/s**, 79.6% of the beat rate |
-| the head stream | 65,667,072 B in 4.103-4.123 ms = **15.93-16.01 GB/s**, 99.5-100.0% |
+| the head stream | 65,667,072 B in 4.103-4.123 ms = 15.93-16.01 GB/s *as the runtime reports it* |
 
-The gap in the model stream is not the memory — the head stream proves the DDR feeds the fabric at
-its full beat rate in the same token. Nor is it the 120 short runs a token: every step outside the
+The head figure is not a bandwidth. The runtime's stage-1 time subtracts `CHUNK_WORK_MS`, the
+top-256 work done between chunks, while the next chunk's DMA is already streaming. Timed from each
+burst's arm to each engine's last neuron, the head's eight chunks take about 4.89 ms against a
+reported 4.00, **13.44 GB/s**, and engines 1 and 2 stream at 3.36 GB/s against 3.86 for engines 0
+and 3 — the same gap as the model stream (`results/probe-2026-09-26.txt`, measured on the earlier
+250 MHz bitstream). So nothing here shows the DDR feeding four engines at the full beat rate.
+The gap is not the 120 short runs a token either: every step outside the
 weight bursts together is 5.4% of the engine time, about 1.8 ms a token
 (`results/phase-remeasure.log`). It is inside the bursts. Engines 1 and 2, on HP1 and HP2, finish
 9-33% after engines 0 and 3 in every phase, together, while 0 and 3 wait (`results/probe4.log`).
 Other port arrangements are slower: 6.4% with the engines on HP0 HP2 HPC0 HPC1
 (`results/kria-ddr-results.txt`), and 7.5% more burst time on HP0 HP1 HP3 HPC0
 (`results/lone-test.log`).
+
+Where the four engines' start addresses fall decides most of it. HP1 and HP2 share one DDR
+controller port, and with an o_proj-sized burst the four starts' positions modulo 64 KiB, relative to
+each other, move the burst from 86.3 µs to 116.7 µs; the even split sits at 108-109 µs, and moving
+all four together changes nothing (`results/sweep-2026-09-26.txt`, 512 placements). Choosing each
+engine's rows so its start lands in a good placement needs no repacking — every phase is a row split
+over rows stored in order — and with `--gu-chunks 1 --head-chunks 1` it gave 15.72 tok/s against
+14.90 for the same chunking evenly split and 14.53 for the default, over six interleaved runs each,
+every token id unchanged. That runtime change is not in `runtime/`.
 
 ## Power and energy
 
@@ -200,7 +214,11 @@ The engine is `hardware/attn_fx_v3.v` (five key/value groups of four query heads
 multipliers shared across the groups, accumulators in distributed RAM), wrapped for the stream by
 `hardware/attn_fx_axi.v` and put beside the matvec engine by `hardware/ternary_port_axi.v`, which
 switches the DMA between them on bit 15 of the port's GPIO. `hardware/tb_attn_fx_axi.v` checks it
-against `hardware/fxmodel.py` layer by layer, and CI runs that on every push. Two of the four ports
+against `hardware/fxmodel.py` layer by layer, and CI runs that on every push.
+`hardware/tb_attn_host.v` drives `attn_fx_axi` alone with the bytes the host writes;
+`hardware/tb_port_attn.v` drives the block inside the port wrapper the bitstream instantiates, the
+way the runtime does — the select bit set through the GPIO output, the header and the cache
+streamed in, the answers taken out of `m_axis` — so it covers the mux as well. Two of the four ports
 carry one: three do not fit, 89.9% of the LUTs and 0.9 ns short of the clock.
 
 ## The FFN glue at sixteen chains
@@ -357,8 +375,10 @@ Each of these is a projection, marked as one, and none is measured.
 
 1. **An even split across the four engines** — engines 1 and 2 hold the other two up in every
    phase. Shares matched to each engine's measured rate would save about 84 µs a layer
-   (`results/probe5.log`): 2.5 ms a token, 57.1 ms, 17.5 tok/s, at the price of repacking the 417 MB
-   weight file into uneven shares. Fewer, longer engine runs are worth at most the 1.8 ms the runs
+   (`results/probe5.log`): 2.5 ms a token, 57.1 ms, 17.5 tok/s. It needs no repacking (rows are
+   stored in order, so uneven shares are a runtime change), but shares matched to rate alone did not
+   pay when tried: the engines' start addresses decide their rate, and placing those is what paid —
+   see the end of *Bandwidth*. Fewer, longer engine runs are worth at most the 1.8 ms the runs
    cost: 57.8 ms, 17.3 tok/s.
 2. **Batched generation across independent conversations.** The engines already answer one pass of
    the weight stream for four vectors and the prompt already uses it; four separate conversations

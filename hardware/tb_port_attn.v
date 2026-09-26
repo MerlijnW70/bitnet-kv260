@@ -1,9 +1,6 @@
 `timescale 1ns/1ps
 `default_nettype none
 
-/* The block inside the port wrapper the bitstream actually instantiates, driven the way the
- * runtime drives it: the select bit set through gpo, the header and the cache streamed in, the
- * answers taken out of m_axis. tb_attn_host covers attn_fx_axi alone; this covers the mux. */
 module tb_port_attn;
     parameter GROUPS = 16;
     parameter SLOTS  = 1;
